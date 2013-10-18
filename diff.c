@@ -1330,13 +1330,14 @@ static void find_common_prefix_suffix(const char *a, const char *b,
 }
 
 /*
- * Omit each parts to fix in name_width.
+ * Shorten some parts to fit the output to name_width.
  * Formatted string is "<pfx>{<a_mid> => <b_mid>}<sfx>".
- * At first, omit <pfx> as long as possible.
- * If it is not enough, omit <a_mid>, <b_mid> trying to set the length of
- * those 2 parts(including "...") to the same.
- * If it is not enough yet, omit <sfx>.
- * Ex:
+ * At first, shorten <pfx> as long as possible.
+ * If it is not enough, shorten <a_mid>, <b_mid> trying to make
+ * the length of those 2 parts (including "...") to the same.
+ * If it is still not enough, shorten <sfx>.
+ *
+ * E.g.
  * "foofoofoo => barbarbar"
  *   will be like
  * "...foo => ...bar".
@@ -1344,10 +1345,10 @@ static void find_common_prefix_suffix(const char *a, const char *b,
  *   will be like
  * "...parent{...foofoo => ...barbar}path/filename"
  */
-static void rename_omit(struct strbuf *pfx,
-				struct strbuf *a_mid, struct strbuf *b_mid,
-				struct strbuf *sfx,
-				int name_width)
+static void shorten_rename(struct strbuf *pfx,
+			   struct strbuf *a_mid, struct strbuf *b_mid,
+			   struct strbuf *sfx,
+			   int name_width)
 {
 	static const char arrow[] = " => ";
 	static const char dots[] = "...";
@@ -1359,8 +1360,8 @@ static void rename_omit(struct strbuf *pfx,
 	size_t max_sfx_len;
 	size_t sfx_len;
 
-	name_len = pfx->len + a_mid->len + b_mid->len + sfx->len + strlen(arrow)
-		+ (use_curly_braces ? 2 : 0);
+	name_len = pfx->len + a_mid->len + b_mid->len + sfx->len + strlen(arrow) +
+		(use_curly_braces ? 2 : 0);
 
 	if (name_len <= name_width)
 		return; /* everything fits in name_width */
@@ -1368,37 +1369,33 @@ static void rename_omit(struct strbuf *pfx,
 	if (use_curly_braces) {
 		if (strlen(dots) + (name_len - pfx->len) <= name_width) {
 			/*
-			 * Just omitting left of '{' is enough
-			 * Ex: ...aaa{foofoofoo => bar}file
+			 * Just omitting some from the left of '{' is enough.
+			 * E.g. ...aaa{foofoofoo => bar}file
 			 */
-			strbuf_splice(pfx, 0, name_len - name_width + strlen(dots), dots, strlen(dots));
+			strbuf_splice(pfx, 0, name_len - name_width + strlen(dots),
+				      dots, strlen(dots));
 			return;
-		} else {
-			if (pfx->len > strlen(dots)) {
-				/*
-				 * Just omitting left of '{' is not enough
-				 * name will be "...{SOMETHING}SOMETHING"
-				 */
-				strbuf_reset(pfx);
-				strbuf_addstr(pfx, dots);
-			}else{
-				/*
-				 * If <pfx> is shorter than dots("..."),
-				 * there is no sense to replace <pfx> to dots
-				 * but name will be just like "a{SOMETHING}SOMETHING".
-				 */
-				;
-			}
+		} else if (pfx->len > strlen(dots)) {
+			/*
+			 * Just omitting left of '{' is not enough;
+			 * name will be "...{SOMETHING}SOMETHING"
+			 */
+			strbuf_reset(pfx);
+			strbuf_addstr(pfx, dots);
 		}
+		/*
+		 * Otherwise, if <pfx> is shorter than dots("..."),
+		 * there is no sense to replace <pfx> to dots
+		 * but name will be just like "a{SOMETHING}SOMETHING".
+		 */
 	}
 
 	left = 0;
 	right = name_width + 1;
 
-#define MIN(X, Y) ((X < Y) ? (X) : (Y))
-#define MAX(X, Y) ((X > Y) ? (X) : (Y))
+#define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))
 
-	/* In case other than <sfx> is omitted like: "...{... => ...}<sfx>" */
+	/* If everything other than sfx is shortened, how long sfx can be? */
 	max_sfx_len = name_width
 		- MIN(strlen(dots), pfx->len)
 		- MIN(strlen(dots), a_mid->len)
@@ -1407,16 +1404,17 @@ static void rename_omit(struct strbuf *pfx,
 		- (use_curly_braces ? 2 : 0);
 	sfx_len = MIN(sfx->len, max_sfx_len);
 
-	/* binary search to find max_part_len(maximum length of omitted parts) */
-	while(left + 1 < right){
+	/* binary search to find max_part_len (maximum length of shortened parts) */
+	while (left + 1 < right) {
 		size_t mid = (left + right) / 2;
 
 		/* length of "<pfx>{<a_mid> => <b_mid>}<sfx>" */
-		size_t l = pfx->len + MIN(mid, a_mid->len) + MIN(mid, b_mid->len) + sfx_len + strlen(arrow) + (use_curly_braces ? 2 : 0);
-		if(l <= name_width){
+		size_t l = pfx->len + MIN(mid, a_mid->len) + MIN(mid, b_mid->len) +
+			strlen(arrow) + (use_curly_braces ? 2 : 0) + sfx_len;
+		if (l <= name_width) {
 			left = mid;
 			remainder_part_len = name_width - l;
-		}else{
+		} else {
 			right = mid;
 		}
 	}
@@ -1425,24 +1423,30 @@ static void rename_omit(struct strbuf *pfx,
 	if (max_part_len < strlen(dots))
 		max_part_len = strlen(dots);
 	if (sfx->len > sfx_len)
-		strbuf_splice(sfx, 0, sfx->len - sfx_len + strlen(dots), dots, strlen(dots));
+		strbuf_splice(sfx, 0, sfx->len - sfx_len + strlen(dots),
+			      dots, strlen(dots));
 	if (remainder_part_len == 2)
 		max_part_len++;
 	if (a_mid->len > max_part_len)
-		strbuf_splice(a_mid, 0, a_mid->len - max_part_len + strlen(dots), dots, strlen(dots));
+		strbuf_splice(a_mid, 0, a_mid->len - max_part_len + strlen(dots),
+			      dots, strlen(dots));
 	if (remainder_part_len == 1)
 		max_part_len++;
 	if (b_mid->len > max_part_len)
-		strbuf_splice(b_mid, 0, b_mid->len - max_part_len + strlen(dots), dots, strlen(dots));
+		strbuf_splice(b_mid, 0, b_mid->len - max_part_len + strlen(dots),
+			      dots, strlen(dots));
 }
 
 static char *pprint_rename(const char *a, const char *b, int name_width)
 {
-	struct strbuf pfx = STRBUF_INIT, a_mid = STRBUF_INIT, b_mid = STRBUF_INIT, sfx = STRBUF_INIT;
+	struct strbuf pfx = STRBUF_INIT;
+	struct strbuf a_mid = STRBUF_INIT;
+	struct strbuf b_mid = STRBUF_INIT;
+	struct strbuf sfx = STRBUF_INIT;
 	struct strbuf name = STRBUF_INIT;
 
 	find_common_prefix_suffix(a, b, &pfx, &a_mid, &b_mid, &sfx);
-	rename_omit(&pfx, &a_mid, &b_mid, &sfx, name_width);
+	shorten_rename(&pfx, &a_mid, &b_mid, &sfx, name_width);
 
 	strbuf_grow(&name, pfx.len + a_mid.len + b_mid.len + sfx.len + 7);
 	if (pfx.len + sfx.len) {
