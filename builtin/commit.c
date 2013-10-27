@@ -123,6 +123,7 @@ static int use_editor = 1, include_status = 1;
 static int show_ignored_in_status, have_option_m;
 static const char *only_include_assumed;
 static struct strbuf message = STRBUF_INIT;
+static struct strbuf fixes = STRBUF_INIT;
 
 static enum status_format {
 	STATUS_FORMAT_NONE = 0,
@@ -132,6 +133,28 @@ static enum status_format {
 
 	STATUS_FORMAT_UNSPECIFIED
 } status_format = STATUS_FORMAT_UNSPECIFIED;
+
+static int opt_parse_f(const struct option *opt, const char *arg, int unset)
+{
+	struct strbuf *sb = opt->value;
+	if (unset) {
+		strbuf_setlen(sb, 0);
+	} else {
+		struct pretty_print_context ctx = {0};
+		struct commit *commit;
+
+		commit = lookup_commit_reference_by_name(arg);
+		if (!commit)
+			die(_("could not lookup commit %s"), arg);
+		ctx.output_encoding = get_commit_output_encoding();
+		ctx.abbrev = DEFAULT_ABBREV;
+		if (ctx.abbrev < 12)
+			ctx.abbrev = 12;
+		format_commit_message(commit, "Fixes: %h (%s)\n", sb, &ctx);
+	}
+
+	return 0;
+}
 
 static int opt_parse_m(const struct option *opt, const char *arg, int unset)
 {
@@ -718,7 +741,7 @@ static int prepare_to_commit(const char *index_file, const char *prefix,
 	if (clean_message_contents)
 		stripspace(&sb, 0);
 
-	if (signoff) {
+	if (signoff || fixes.len) {
 		/*
 		 * See if we have a Conflicts: block at the end. If yes, count
 		 * its size, so we can ignore it.
@@ -742,7 +765,8 @@ static int prepare_to_commit(const char *index_file, const char *prefix,
 			previous = eol;
 		}
 
-		append_signoff(&sb, ignore_footer, 0);
+		append_signoff_extra(&sb, ignore_footer,
+				     signoff ? 0 : APPEND_EXTRA_ONLY, &fixes);
 	}
 
 	if (fwrite(sb.buf, 1, sb.len, s->fp) < sb.len)
@@ -1463,6 +1487,7 @@ int cmd_commit(int argc, const char **argv, const char *prefix)
 		OPT_STRING(0, "squash", &squash_message, N_("commit"), N_("use autosquash formatted message to squash specified commit")),
 		OPT_BOOL(0, "reset-author", &renew_authorship, N_("the commit is authored by me now (used with -C/-c/--amend)")),
 		OPT_BOOL('s', "signoff", &signoff, N_("add Signed-off-by:")),
+		OPT_CALLBACK(0, "fixes", &fixes, N_("commit"), N_("add Fixes: for the specified commit"), opt_parse_f),
 		OPT_FILENAME('t', "template", &template_file, N_("use specified template file")),
 		OPT_BOOL('e', "edit", &edit_flag, N_("force edit of commit")),
 		OPT_STRING(0, "cleanup", &cleanup_arg, N_("default"), N_("how to strip spaces and #comments from message")),

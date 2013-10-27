@@ -8,8 +8,8 @@ git-commit - Record changes to the repository
 SYNOPSIS
 --------
 [verse]
-'git commit' [-a | --interactive | --patch] [-s] [-v] [-u<mode>] [--amend]
-	   [--dry-run] [(-c | -C | --fixup | --squash) <commit>]
+'git commit' [-a | --interactive | --patch] [-s] [--fixes <commit>] [-v] [-u<mode>]
+	   [--amend] [--dry-run] [(-c | -C | --fixup | --squash) <commit>]
 	   [-F <file> | -m <msg>] [--reset-author] [--allow-empty]
 	   [--allow-empty-message] [--no-verify] [-e] [--author=<author>]
 	   [--date=<date>] [--cleanup=<mode>] [--[no-]status]
@@ -155,6 +155,13 @@ OPTIONS
 --signoff::
 	Add Signed-off-by line by the committer at the end of the commit
 	log message.
+
+--fixes=<commit>::
+	Add Fixes line for the specified commit at the end of the commit
+	log message.  This line includes an abbreviated commit hash for
+	the specified commit; the `core.abbrev` option determines the
+	length of the abbreviated commit hash used, with a minimum length
+	of 12 hex digits.
 
 -n::
 --no-verify::

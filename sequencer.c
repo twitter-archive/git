@@ -1135,26 +1135,33 @@ int sequencer_pick_revisions(struct replay_opts *opts)
 	return pick_commits(todo_list, opts);
 }
 
-void append_signoff(struct strbuf *msgbuf, int ignore_footer, unsigned flag)
+void append_signoff_extra(struct strbuf *msgbuf, int ignore_footer,
+			  unsigned flag, struct strbuf *extrabuf)
 {
 	unsigned no_dup_sob = flag & APPEND_SIGNOFF_DEDUP;
+	unsigned append_sob = !(flag & APPEND_EXTRA_ONLY);
 	struct strbuf sob = STRBUF_INIT;
 	int has_footer;
 
-	strbuf_addstr(&sob, sign_off_header);
-	strbuf_addstr(&sob, fmt_name(getenv("GIT_COMMITTER_NAME"),
-				getenv("GIT_COMMITTER_EMAIL")));
-	strbuf_addch(&sob, '\n');
+	if (append_sob) {
+		strbuf_addstr(&sob, sign_off_header);
+		strbuf_addstr(&sob, fmt_name(getenv("GIT_COMMITTER_NAME"),
+					getenv("GIT_COMMITTER_EMAIL")));
+		strbuf_addch(&sob, '\n');
+	}
 
 	/*
 	 * If the whole message buffer is equal to the sob, pretend that we
 	 * found a conforming footer with a matching sob
 	 */
-	if (msgbuf->len - ignore_footer == sob.len &&
+	if (append_sob &&
+	    msgbuf->len - ignore_footer == sob.len &&
 	    !strncmp(msgbuf->buf, sob.buf, sob.len))
 		has_footer = 3;
 	else
-		has_footer = has_conforming_footer(msgbuf, &sob, ignore_footer);
+		has_footer = has_conforming_footer(msgbuf,
+						   append_sob ? &sob : NULL,
+						   ignore_footer);
 
 	if (!has_footer) {
 		const char *append_newlines = NULL;
@@ -1193,9 +1200,17 @@ void append_signoff(struct strbuf *msgbuf, int ignore_footer, unsigned flag)
 				append_newlines, strlen(append_newlines));
 	}
 
-	if (has_footer != 3 && (!no_dup_sob || has_footer != 2))
+	if (append_sob && has_footer != 3 && (!no_dup_sob || has_footer != 2))
 		strbuf_splice(msgbuf, msgbuf->len - ignore_footer, 0,
 				sob.buf, sob.len);
+	if (extrabuf)
+		strbuf_insert(msgbuf, msgbuf->len - ignore_footer,
+				extrabuf->buf, extrabuf->len);
 
 	strbuf_release(&sob);
+}
+
+void append_signoff(struct strbuf *msgbuf, int ignore_footer, unsigned flag)
+{
+	append_signoff_extra(msgbuf, ignore_footer, flag, NULL);
 }

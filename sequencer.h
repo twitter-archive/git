@@ -7,6 +7,7 @@
 #define SEQ_OPTS_FILE	"sequencer/opts"
 
 #define APPEND_SIGNOFF_DEDUP (1u << 0)
+#define APPEND_EXTRA_ONLY (1u << 1)
 
 enum replay_action {
 	REPLAY_REVERT,
@@ -51,5 +52,7 @@ int sequencer_pick_revisions(struct replay_opts *opts);
 extern const char sign_off_header[];
 
 void append_signoff(struct strbuf *msgbuf, int ignore_footer, unsigned flag);
+void append_signoff_extra(struct strbuf *msgbuf, int ignore_footer,
+			  unsigned flag, struct strbuf *extrabuf);
 
 #endif

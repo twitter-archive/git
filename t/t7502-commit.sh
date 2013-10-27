@@ -137,13 +137,48 @@ test_expect_success 'partial removal' '
 
 '
 
+signoff_ident () {
+	git var GIT_COMMITTER_IDENT | sed -e "s/>.*/>/"
+}
+
 test_expect_success 'sign off' '
 
 	>positive &&
 	git add positive &&
 	git commit -s -m "thank you" &&
 	actual=$(git cat-file commit HEAD | sed -ne "s/Signed-off-by: //p") &&
-	expected=$(git var GIT_COMMITTER_IDENT | sed -e "s/>.*/>/") &&
+	expected=$(signoff_ident) &&
+	test "z$actual" = "z$expected"
+
+'
+
+fixes_for_commits () {
+	git -c core.abbrev=12 show -s --format="Fixes: %h (%s)" "$@"
+}
+
+test_expect_success '--fixes' '
+
+	echo >>positive &&
+	git add positive &&
+	git commit --fixes HEAD -m "fix bug" &&
+	actual=$(git cat-file commit HEAD | sed -e "1,/^\$/d") &&
+	expected=$(echo fix bug; echo; fixes_for_commits HEAD^) &&
+	test "z$actual" = "z$expected"
+
+'
+
+test_expect_success 'multiple --fixes with signoff' '
+
+	echo >>positive &&
+	git add positive &&
+	git commit --fixes HEAD^ --fixes HEAD -s -m "signed bugfix" &&
+	actual=$(git cat-file commit HEAD | sed -e "1,/^\$/d") &&
+	expected=$(
+		echo signed bugfix
+		echo
+		echo "Signed-off-by: $(signoff_ident)"
+		fixes_for_commits HEAD^^ HEAD^
+	) &&
 	test "z$actual" = "z$expected"
 
 '
