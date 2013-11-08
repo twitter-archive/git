@@ -6,9 +6,17 @@
 static void create_directories(const char *path, int path_len,
 			       const struct checkout *state)
 {
-	char *buf = xmalloc(path_len + 1);
-	int len = 0;
+	char *buf;
+	int len;
 
+	for (len = path_len - 1; 0 <= len; len--)
+		if (path[len] == '/')
+			break;
+	if (has_dirs_only_path(path, len, state->base_dir_len))
+		return; /* ok, we have the whole leading directory */
+
+	buf = xmalloc(path_len + 1);
+	len = 0;
 	while (len < path_len) {
 		do {
 			buf[len] = path[len];
