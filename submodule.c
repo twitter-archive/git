@@ -199,6 +199,16 @@ void set_diffopt_flags_from_submodule_config(struct diff_options *diffopt,
 	}
 }
 
+int is_ignored_submodule(const char *path)
+{
+	struct diff_options diffopt;
+	memset(&diffopt, 0, sizeof(diffopt));
+	set_diffopt_flags_from_submodule_config(&diffopt, path);
+	if (DIFF_OPT_TST(&diffopt, IGNORE_SUBMODULES))
+		return 1;
+	return 0;
+}
+
 int submodule_config(const char *var, const char *value, void *cb)
 {
 	if (!prefixcmp(var, "submodule."))
