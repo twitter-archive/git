@@ -1357,6 +1357,11 @@ test_expect_success "status (core.commentchar with two chars with submodule summ
 test_expect_success "--ignore-submodules=all suppresses submodule summary" '
 	cat > expect << EOF &&
 On branch master
+Changes to be committed:
+  (use "git reset HEAD <file>..." to unstage)
+
+	modified:   sm
+
 Changes not staged for commit:
   (use "git add <file>..." to update what will be committed)
   (use "git checkout -- <file>..." to discard changes in working directory)
@@ -1374,7 +1379,6 @@ Untracked files:
 	output
 	untracked
 
-no changes added to commit (use "git add" and/or "git commit -a")
 EOF
 	git status --ignore-submodules=all > output &&
 	test_i18ncmp expect output
