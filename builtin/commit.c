@@ -1361,6 +1361,7 @@ static void print_summary(const char *prefix, const unsigned char *sha1,
 	strbuf_release(&committer_ident);
 
 	init_revisions(&rev, prefix);
+	enforce_no_complete_ignore_submodule(&rev.diffopt);
 	setup_revisions(0, NULL, &rev, NULL);
 
 	rev.diff = 1;
