@@ -15,6 +15,7 @@
 #include "diffcore.h"
 #include "revision.h"
 #include "bulk-checkin.h"
+#include "submodule.h"
 
 static const char * const builtin_add_usage[] = {
 	N_("git add [options] [--] <pathspec>..."),
@@ -378,6 +379,10 @@ static int add_config(const char *var, const char *value, void *cb)
 		ignore_add_errors = git_config_bool(var, value);
 		return 0;
 	}
+
+	if (!prefixcmp(var, "submodule."))
+		return parse_submodule_config_option(var, value);
+
 	return git_default_config(var, value, cb);
 }
 
@@ -415,6 +420,7 @@ int cmd_add(int argc, const char **argv, const char *prefix)
 	int implicit_dot = 0;
 	struct update_callback_data update_data;
 
+	gitmodules_config();
 	git_config(add_config, NULL);
 
 	argc = parse_options(argc, argv, prefix, builtin_add_options,
