@@ -140,20 +140,11 @@ OPTIONS
 	want to manipulate.  This option is mandatory
 	for all commands.
 
-
-OPTIONS FOR add, merge, pull, rejoin
-----------------------------------
 -m <message>::
 --message=<message>::
-	This option is only valid for add, merge, pull, and
-	split '--rejoin'.
-
 	Specify <message> as the commit message for the merge commit.
 
 --squash::
-	This option is only valid for add, merge, pull, and
-	split '--rejoin'.
-
 	Instead of merging the entire history from the subtree
 	project, produce only a single commit that contains all
 	the differences you want to merge, and then merge that
