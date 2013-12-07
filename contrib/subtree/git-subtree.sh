@@ -21,6 +21,7 @@ d             show debug messages
 P,prefix=     the name of the subdir to split out
 m,message=    use the given message as the commit message for the merge commit
 squash        merge subtree changes as a single commit
+edit          allow user to edit squash commit message interactively
  options for 'split'
 annotate=     add a prefix to commit message of new commits
 b,branch=     create a new branch from the split subtree
@@ -45,6 +46,7 @@ ignore_joins=
 annotate=
 squash=
 message=
+edit=
 
 debug()
 {
@@ -91,6 +93,7 @@ while [ $# -gt 0 ]; do
 		--ignore-joins) ignore_joins=1 ;;
 		--no-ignore-joins) ignore_joins= ;;
 		--squash) squash=1 ;;
+		--edit) edit=1 ;;
 		--no-squash) squash= ;;
 		--) break ;;
 		*) die "Unexpected option: $opt" ;;
@@ -434,13 +437,12 @@ new_squash_commit()
 	old="$1"
 	oldsub="$2"
 	newsub="$3"
+	msg_file="$4"
 	tree=$(toptree_for_commit $newsub) || exit $?
 	if [ -n "$old" ]; then
-		squash_msg "$dir" "$oldsub" "$newsub" | 
-			git commit-tree "$tree" -p "$old" || exit $?
+		git commit-tree "$tree" -p "$old" -F "$msg_file" || exit $?
 	else
-		squash_msg "$dir" "" "$newsub" |
-			git commit-tree "$tree" || exit $?
+		git commit-tree "$tree" -F "$msg_file" || exit $?
 	fi
 }
 
@@ -556,7 +558,13 @@ cmd_add_commit()
 	fi
 	
 	if [ -n "$squash" ]; then
-		rev=$(new_squash_commit "" "" "$rev") || exit $?
+		msg_file="$GIT_DIR/COMMIT_EDITMSG"
+		squash_msg "$dir" "" "$rev" >"$msg_file"
+		if [ -n "$edit" ]; then
+			git_editor "$msg_file"
+		fi
+		rev=$(new_squash_commit "" "" "$rev" "$msg_file") || exit $?
+		rm -f "$msg_file"
 		commit=$(add_squashed_msg "$rev" "$dir" |
 			 git commit-tree $tree $headp -p "$rev") || exit $?
 	else
@@ -672,8 +680,14 @@ cmd_split()
 				say "Subtree is already at commit $latest_new."
 				exit 0
 			fi
-			new=$(new_squash_commit "$old" "$sub" "$latest_new") \
-				|| exit $?
+			msg_file="$GIT_DIR/COMMIT_EDITMSG"
+			squash_msg "$dir" "$sub" "$latest_new" >"$msg_file"
+			if [ -n "$edit" ]; then
+				git_editor "$msg_file"
+			fi
+			new=$(new_squash_commit "$old" "$sub" "$latest_new" \
+						"$msg_file") || exit $?
+			rm -f "$msg_file"
 			debug "New squash commit: $new"
 		fi
 
@@ -708,7 +722,13 @@ cmd_merge()
 			say "Subtree is already at commit $rev."
 			exit 0
 		fi
-		new=$(new_squash_commit "$old" "$sub" "$rev") || exit $?
+		msg_file="$GIT_DIR/COMMIT_EDITMSG"
+		squash_msg "$dir" "$sub" "$rev" >"$msg_file"
+		if [ -n "$edit" ]; then
+			git_editor "$msg_file"
+		fi
+		new=$(new_squash_commit "$old" "$sub" "$rev" "$msg_file") || exit $?
+		rm -f "$msg_file"
 		debug "New squash commit: $new"
 		rev="$new"
 	fi
@@ -748,6 +768,7 @@ cmd_push()
 	if [ -n "$squash" ]; then
 		opts="-squash"
 	fi
+	# Can't easily pass on --edit because of stdout capture redirection
 
 	if [ -e "$dir" ]; then
 	    repository=$1

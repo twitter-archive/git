@@ -177,6 +177,10 @@ OPTIONS
 	the merge back to the mainline, not the synthetic subtree
 	history.
 
+--edit::
+	When used with '--squash', bring up an editor on the squash
+	commit message, to allow customizing it.
+
 
 OPTIONS FOR split
 -----------------
