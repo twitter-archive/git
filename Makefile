@@ -1598,6 +1598,11 @@ MAKE/%-string.h: MAKE/% script/mkcstring
 		$(subst -,_,$*) <$< >$@+ && \
 		mv $@+ $@
 
+MAKE/%.sh: MAKE/% script/mksh
+	$(QUIET_GEN)$(SHELL_PATH) script/mksh \
+		$(subst -,_,$*) <$< >$@+ && \
+		mv $@+ $@
+
 LIBS = $(GITLIBS) $(EXTLIBS)
 
 BASIC_CFLAGS += -DSHA1_HEADER=$(call sq,$(SHA1_HEADER)) \
@@ -1734,7 +1739,6 @@ common-cmds.h: $(wildcard Documentation/git-*.txt)
 
 $(eval $(call make-var,SCRIPT-DEFINES,script parameters,\
 	:$(SHELL_PATH)\
-	:$(DIFF)\
 	:$(GIT_VERSION)\
 	:$(localedir)\
 	:$(NO_CURL)\
@@ -1743,18 +1747,24 @@ $(eval $(call make-var,SCRIPT-DEFINES,script parameters,\
 	:$(gitwebdir)\
 	:$(PERL_PATH)\
 ))
+$(eval $(call make-var,DIFF,diff command,$(DIFF)))
 define cmd_munge_script
 $(RM) $@ $@+ && \
+{ \
+includes="$(filter MAKE/%.sh,$^)"; \
+if ! test -z "$$includes"; then \
+	cat $$includes; \
+fi && \
 sed -e '1s|#!.*/sh|#!$(call sqi,$(SHELL_PATH))|' \
     -e 's|@SHELL_PATH@|$(call sqi,$(SHELL_PATH))|' \
-    -e 's|@@DIFF@@|$(call sqi,$(DIFF))|' \
     -e 's|@@LOCALEDIR@@|$(call sqi,$(localedir))|g' \
     -e 's/@@NO_CURL@@/$(NO_CURL)/g' \
     -e 's/@@USE_GETTEXT_SCHEME@@/$(USE_GETTEXT_SCHEME)/g' \
     -e $(BROKEN_PATH_FIX) \
     -e 's|@@GITWEBDIR@@|$(call sqi,$(gitwebdir))|g' \
     -e 's|@@PERL@@|$(call sqi,$(PERL_PATH))|g' \
-    $@.sh >$@+
+    $@.sh; \
+} >$@+
 endef
 
 $(patsubst %.sh,%,$(SCRIPT_SH)) : % : %.sh MAKE/SCRIPT-DEFINES
@@ -1765,6 +1775,8 @@ $(patsubst %.sh,%,$(SCRIPT_SH)) : % : %.sh MAKE/SCRIPT-DEFINES
 $(SCRIPT_LIB) : % : %.sh MAKE/SCRIPT-DEFINES
 	$(QUIET_GEN)$(cmd_munge_script) && \
 	mv $@+ $@
+
+git-sh-setup: MAKE/DIFF.sh
 
 git.res: git.rc GIT-VERSION-FILE
 	$(QUIET_RC)$(RC) \
