@@ -73,7 +73,7 @@ GIT_PERF_AGGREGATING_LATER=t
 export GIT_PERF_AGGREGATING_LATER
 
 cd "$(dirname $0)"
-. ../../GIT-BUILD-OPTIONS
+. ../../MAKE/BUILD-OPTIONS
 
 if test $# = 0 -o "$1" = -- -o -f "$1"; then
 	set -- . "$@"

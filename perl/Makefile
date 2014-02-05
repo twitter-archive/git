@@ -41,7 +41,7 @@ modules += Git/SVN/Prompt
 modules += Git/SVN/Ra
 modules += Git/SVN/Utils
 
-$(makfile): ../GIT-CFLAGS Makefile
+$(makfile): ../MAKE/CFLAGS Makefile
 	echo all: private-Error.pm Git.pm Git/I18N.pm > $@
 	set -e; \
 	for i in $(modules); \
@@ -79,11 +79,11 @@ $(makfile): ../GIT-CFLAGS Makefile
 	echo instlibdir: >> $@
 	echo '	echo $(instdir_SQ)' >> $@
 else
-$(makfile): Makefile.PL ../GIT-CFLAGS
+$(makfile): Makefile.PL ../MAKE/CFLAGS
 	$(PERL_PATH) $< PREFIX='$(prefix_SQ)' INSTALL_BASE='' --localedir='$(localedir_SQ)'
 endif
 
 # this is just added comfort for calling make directly in perl dir
-# (even though GIT-CFLAGS aren't used yet. If ever)
-../GIT-CFLAGS:
-	$(MAKE) -C .. GIT-CFLAGS
+# (even though MAKE/CFLAGS aren't used yet. If ever)
+../MAKE/CFLAGS:
+	$(MAKE) -C .. MAKE/CFLAGS

@@ -1564,10 +1564,10 @@ endif
 # usage: $(eval $(call make-var,FN,DESC,CONTENTS))
 #
 # Create a rule to write $CONTENTS (which should come from a make variable)
-# to GIT-$FN, but only if not already there. This can be used to create a
+# to MAKE/$FN, but only if not already there. This can be used to create a
 # dependency on a Makefile variable. Prints $DESC to the user.
 define make-var
-GIT-$1: FORCE
+MAKE/$1: FORCE
 	@VALUE='$$(subst ','\'',$3)'; \
 	if test x"$$$$VALUE" != x"`cat $$@ 2>/dev/null`"; then \
 		echo >&2 "    * new $2"; \
@@ -1658,7 +1658,7 @@ all:: profile-clean
 endif
 endif
 
-all:: $(ALL_PROGRAMS) $(SCRIPT_LIB) $(BUILT_INS) $(OTHER_PROGRAMS) GIT-BUILD-OPTIONS
+all:: $(ALL_PROGRAMS) $(SCRIPT_LIB) $(BUILT_INS) $(OTHER_PROGRAMS) MAKE/BUILD-OPTIONS
 ifneq (,$X)
 	$(QUIET_BUILT_IN)$(foreach p,$(patsubst %$X,%,$(filter %$X,$(ALL_PROGRAMS) $(BUILT_INS) git$X)), test -d '$p' -o '$p' -ef '$p$X' || $(RM) '$p';)
 endif
@@ -1714,25 +1714,25 @@ strip: $(PROGRAMS) git$X
 #   dependencies here will not need to change if the force-build
 #   details change some day.
 
-git.sp git.s git.o: GIT-PREFIX
+git.sp git.s git.o: MAKE/PREFIX
 git.sp git.s git.o: EXTRA_CPPFLAGS = \
 	'-DGIT_HTML_PATH="$(htmldir_relative_SQ)"' \
 	'-DGIT_MAN_PATH="$(mandir_relative_SQ)"' \
 	'-DGIT_INFO_PATH="$(infodir_relative_SQ)"'
 
-git$X: git.o GIT-LDFLAGS $(BUILTIN_OBJS) $(GITLIBS)
+git$X: git.o MAKE/LDFLAGS $(BUILTIN_OBJS) $(GITLIBS)
 	$(QUIET_LINK)$(CC) $(ALL_CFLAGS) -o $@ git.o \
 		$(BUILTIN_OBJS) $(ALL_LDFLAGS) $(LIBS)
 
 help.sp help.s help.o: common-cmds.h
 
-builtin/help.sp builtin/help.s builtin/help.o: common-cmds.h GIT-PREFIX
+builtin/help.sp builtin/help.s builtin/help.o: common-cmds.h MAKE/PREFIX
 builtin/help.sp builtin/help.s builtin/help.o: EXTRA_CPPFLAGS = \
 	'-DGIT_HTML_PATH="$(htmldir_relative_SQ)"' \
 	'-DGIT_MAN_PATH="$(mandir_relative_SQ)"' \
 	'-DGIT_INFO_PATH="$(infodir_relative_SQ)"'
 
-version.sp version.s version.o: GIT-VERSION-FILE GIT-USER-AGENT
+version.sp version.s version.o: GIT-VERSION-FILE MAKE/USER-AGENT
 version.sp version.s version.o: EXTRA_CPPFLAGS = \
 	'-DGIT_VERSION="$(GIT_VERSION)"' \
 	'-DGIT_USER_AGENT=$(GIT_USER_AGENT_CQ_SQ)'
@@ -1773,12 +1773,12 @@ sed -e '1s|#!.*/sh|#!$(SHELL_PATH_SQ)|' \
     $@.sh >$@+
 endef
 
-$(patsubst %.sh,%,$(SCRIPT_SH)) : % : %.sh GIT-SCRIPT-DEFINES
+$(patsubst %.sh,%,$(SCRIPT_SH)) : % : %.sh MAKE/SCRIPT-DEFINES
 	$(QUIET_GEN)$(cmd_munge_script) && \
 	chmod +x $@+ && \
 	mv $@+ $@
 
-$(SCRIPT_LIB) : % : %.sh GIT-SCRIPT-DEFINES
+$(SCRIPT_LIB) : % : %.sh MAKE/SCRIPT-DEFINES
 	$(QUIET_GEN)$(cmd_munge_script) && \
 	mv $@+ $@
 
@@ -1797,14 +1797,14 @@ perl/PM.stamp: FORCE
 	{ cmp $@+ $@ >/dev/null 2>/dev/null || mv $@+ $@; } && \
 	$(RM) $@+
 
-perl/perl.mak: GIT-CFLAGS GIT-PREFIX perl/Makefile perl/Makefile.PL
+perl/perl.mak: MAKE/CFLAGS MAKE/PREFIX perl/Makefile perl/Makefile.PL
 	$(QUIET_SUBDIR0)perl $(QUIET_SUBDIR1) PERL_PATH='$(PERL_PATH_SQ)' prefix='$(prefix_SQ)' $(@F)
 
 $(eval $(call make-var,PERL-DEFINES,perl-specific parameters,\
 	:$(PERL_PATH)\
 	:$(PERLLIB_EXTRA)\
 ))
-$(patsubst %.perl,%,$(SCRIPT_PERL)): % : %.perl perl/perl.mak GIT-PERL-DEFINES GIT-VERSION-FILE
+$(patsubst %.perl,%,$(SCRIPT_PERL)): % : %.perl perl/perl.mak MAKE/PERL-DEFINES GIT-VERSION-FILE
 	$(QUIET_GEN)$(RM) $@ $@+ && \
 	INSTLIBDIR=`MAKEFLAGS= $(MAKE) -C perl -s --no-print-directory instlibdir` && \
 	INSTLIBDIR_EXTRA='$(PERLLIB_EXTRA_SQ)' && \
@@ -1826,7 +1826,7 @@ gitweb:
 	$(QUIET_SUBDIR0)gitweb $(QUIET_SUBDIR1) all
 all:: gitweb
 
-git-instaweb: git-instaweb.sh GIT-SCRIPT-DEFINES
+git-instaweb: git-instaweb.sh MAKE/SCRIPT-DEFINES
 	$(QUIET_GEN)$(cmd_munge_script) && \
 	chmod +x $@+ && \
 	mv $@+ $@
@@ -1842,7 +1842,7 @@ endif # NO_PERL
 
 ifndef NO_PYTHON
 $(eval $(call make-var,PYTHON-VARS,Python interpreter location,$(PYTHON_PATH)))
-$(SCRIPT_PYTHON_GEN): GIT-CFLAGS GIT-PREFIX GIT-PYTHON-VARS
+$(SCRIPT_PYTHON_GEN): MAKE/CFLAGS MAKE/PREFIX MAKE/PYTHON-VARS
 $(SCRIPT_PYTHON_GEN): % : %.py
 	$(QUIET_GEN)$(RM) $@ $@+ && \
 	sed -e '1s|#!.*python|#!$(PYTHON_PATH_SQ)|' \
@@ -1984,13 +1984,13 @@ endif
 endif
 
 ifndef CHECK_HEADER_DEPENDENCIES
-$(C_OBJ): %.o: %.c GIT-CFLAGS $(missing_dep_dirs)
+$(C_OBJ): %.o: %.c MAKE/CFLAGS $(missing_dep_dirs)
 	$(QUIET_CC)$(CC) -o $*.o -c $(dep_args) $(ALL_CFLAGS) $(EXTRA_CPPFLAGS) $<
-$(ASM_OBJ): %.o: %.S GIT-CFLAGS $(missing_dep_dirs)
+$(ASM_OBJ): %.o: %.S MAKE/CFLAGS $(missing_dep_dirs)
 	$(QUIET_CC)$(CC) -o $*.o -c $(dep_args) $(ALL_CFLAGS) $(EXTRA_CPPFLAGS) $<
 endif
 
-%.s: %.c GIT-CFLAGS FORCE
+%.s: %.c MAKE/CFLAGS FORCE
 	$(QUIET_CC)$(CC) -o $@ -S $(ALL_CFLAGS) $(EXTRA_CPPFLAGS) $<
 
 ifdef USE_COMPUTED_HEADER_DEPENDENCIES
@@ -2011,25 +2011,25 @@ else
 $(OBJECTS): $(LIB_H)
 endif
 
-exec_cmd.sp exec_cmd.s exec_cmd.o: GIT-PREFIX
+exec_cmd.sp exec_cmd.s exec_cmd.o: MAKE/PREFIX
 exec_cmd.sp exec_cmd.s exec_cmd.o: EXTRA_CPPFLAGS = \
 	'-DGIT_EXEC_PATH="$(gitexecdir_SQ)"' \
 	'-DBINDIR="$(bindir_relative_SQ)"' \
 	'-DPREFIX="$(prefix_SQ)"'
 
-builtin/init-db.sp builtin/init-db.s builtin/init-db.o: GIT-PREFIX
+builtin/init-db.sp builtin/init-db.s builtin/init-db.o: MAKE/PREFIX
 builtin/init-db.sp builtin/init-db.s builtin/init-db.o: EXTRA_CPPFLAGS = \
 	-DDEFAULT_GIT_TEMPLATE_DIR='"$(template_dir_SQ)"'
 
-config.sp config.s config.o: GIT-PREFIX
+config.sp config.s config.o: MAKE/PREFIX
 config.sp config.s config.o: EXTRA_CPPFLAGS = \
 	-DETC_GITCONFIG='"$(ETC_GITCONFIG_SQ)"'
 
-attr.sp attr.s attr.o: GIT-PREFIX
+attr.sp attr.s attr.o: MAKE/PREFIX
 attr.sp attr.s attr.o: EXTRA_CPPFLAGS = \
 	-DETC_GITATTRIBUTES='"$(ETC_GITATTRIBUTES_SQ)"'
 
-gettext.sp gettext.s gettext.o: GIT-PREFIX
+gettext.sp gettext.s gettext.o: MAKE/PREFIX
 gettext.sp gettext.s gettext.o: EXTRA_CPPFLAGS = \
 	-DGIT_LOCALE_PATH='"$(localedir_SQ)"'
 
@@ -2051,21 +2051,21 @@ compat/nedmalloc/nedmalloc.sp compat/nedmalloc/nedmalloc.o: EXTRA_CPPFLAGS = \
 compat/nedmalloc/nedmalloc.sp: SPARSE_FLAGS += -Wno-non-pointer-null
 endif
 
-git-%$X: %.o GIT-LDFLAGS $(GITLIBS)
+git-%$X: %.o MAKE/LDFLAGS $(GITLIBS)
 	$(QUIET_LINK)$(CC) $(ALL_CFLAGS) -o $@ $(ALL_LDFLAGS) $(filter %.o,$^) $(LIBS)
 
-git-imap-send$X: imap-send.o GIT-LDFLAGS $(GITLIBS)
+git-imap-send$X: imap-send.o MAKE/LDFLAGS $(GITLIBS)
 	$(QUIET_LINK)$(CC) $(ALL_CFLAGS) -o $@ $(ALL_LDFLAGS) $(filter %.o,$^) \
 		$(LIBS) $(OPENSSL_LINK) $(OPENSSL_LIBSSL) $(LIB_4_CRYPTO)
 
-git-http-fetch$X: http.o http-walker.o http-fetch.o GIT-LDFLAGS $(GITLIBS)
+git-http-fetch$X: http.o http-walker.o http-fetch.o MAKE/LDFLAGS $(GITLIBS)
 	$(QUIET_LINK)$(CC) $(ALL_CFLAGS) -o $@ $(ALL_LDFLAGS) $(filter %.o,$^) \
 		$(LIBS) $(CURL_LIBCURL)
-git-http-push$X: http.o http-push.o GIT-LDFLAGS $(GITLIBS)
+git-http-push$X: http.o http-push.o MAKE/LDFLAGS $(GITLIBS)
 	$(QUIET_LINK)$(CC) $(ALL_CFLAGS) -o $@ $(ALL_LDFLAGS) $(filter %.o,$^) \
 		$(LIBS) $(CURL_LIBCURL) $(EXPAT_LIBEXPAT)
 
-git-remote-testsvn$X: remote-testsvn.o GIT-LDFLAGS $(GITLIBS) $(VCSSVN_LIB)
+git-remote-testsvn$X: remote-testsvn.o MAKE/LDFLAGS $(GITLIBS) $(VCSSVN_LIB)
 	$(QUIET_LINK)$(CC) $(ALL_CFLAGS) -o $@ $(ALL_LDFLAGS) $(filter %.o,$^) $(LIBS) \
 	$(VCSSVN_LIB)
 
@@ -2075,7 +2075,7 @@ $(REMOTE_CURL_ALIASES): $(REMOTE_CURL_PRIMARY)
 	ln -s $< $@ 2>/dev/null || \
 	cp $< $@
 
-$(REMOTE_CURL_PRIMARY): remote-curl.o http.o http-walker.o GIT-LDFLAGS $(GITLIBS)
+$(REMOTE_CURL_PRIMARY): remote-curl.o http.o http-walker.o MAKE/LDFLAGS $(GITLIBS)
 	$(QUIET_LINK)$(CC) $(ALL_CFLAGS) -o $@ $(ALL_LDFLAGS) $(filter %.o,$^) \
 		$(LIBS) $(CURL_LIBCURL) $(EXPAT_LIBEXPAT)
 
@@ -2172,9 +2172,9 @@ $(eval $(call make-var,CFLAGS,build flags,$(ALL_CFLAGS)))
 $(eval $(call make-var,LDFLAGS,link flags,$(ALL_LDFLAGS)))
 
 # We need to apply sq twice, once to protect from the shell
-# that runs GIT-BUILD-OPTIONS, and then again to protect it
+# that runs MAKE/BUILD-OPTIONS, and then again to protect it
 # and the first level quoting from the shell that runs "echo".
-GIT-BUILD-OPTIONS: FORCE
+MAKE/BUILD-OPTIONS: FORCE
 	@echo SHELL_PATH=\''$(subst ','\'',$(SHELL_PATH_SQ))'\' >$@
 	@echo PERL_PATH=\''$(subst ','\'',$(PERL_PATH_SQ))'\' >>$@
 	@echo DIFF=\''$(subst ','\'',$(subst ','\'',$(DIFF)))'\' >>$@
@@ -2255,7 +2255,7 @@ test-svn-fe$X: vcs-svn/lib.a
 
 .PRECIOUS: $(TEST_OBJS)
 
-test-%$X: test-%.o GIT-LDFLAGS $(GITLIBS)
+test-%$X: test-%.o MAKE/LDFLAGS $(GITLIBS)
 	$(QUIET_LINK)$(CC) $(ALL_CFLAGS) -o $@ $(ALL_LDFLAGS) $(filter %.o,$^) $(filter %.a,$^) $(LIBS)
 
 check-sha1:: test-sha1$X
@@ -2263,7 +2263,7 @@ check-sha1:: test-sha1$X
 
 SP_OBJ = $(patsubst %.o,%.sp,$(C_OBJ))
 
-$(SP_OBJ): %.sp: %.c GIT-CFLAGS FORCE
+$(SP_OBJ): %.sp: %.c MAKE/CFLAGS FORCE
 	$(QUIET_SP)cgcc -no-compile $(ALL_CFLAGS) $(EXTRA_CPPFLAGS) \
 		$(SPARSE_FLAGS) $<
 
@@ -2477,9 +2477,7 @@ ifndef NO_TCLTK
 	$(MAKE) -C gitk-git clean
 	$(MAKE) -C git-gui clean
 endif
-	$(RM) GIT-VERSION-FILE GIT-CFLAGS GIT-LDFLAGS GIT-BUILD-OPTIONS
-	$(RM) GIT-USER-AGENT GIT-PREFIX
-	$(RM) GIT-SCRIPT-DEFINES GIT-PERL-DEFINES GIT-PYTHON-VARS
+	$(RM) GIT-VERSION-FILE MAKE/*
 
 .PHONY: all install profile-clean clean strip
 .PHONY: shell_compatibility_test please_set_SHELL_PATH_to_a_more_modern_shell
