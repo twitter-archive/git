@@ -1568,6 +1568,17 @@ endif
 sqi = $(subst ','\'',$1)
 sq = '$(call sqi,$1)'
 
+# usage: $(call cq,CONTENTS)
+#
+# Quote the value as appropriate for a C string literal.
+cq = "$(subst ",\",$(subst \,\\,$1))"
+
+# usage: $(call scq,CONTENTS)
+#
+# Quote the value as C string inside a shell string. Good for passing strings
+# on the command line via "-DFOO=$(call # scq,$(FOO))".
+scq = $(call sq,$(call cq,$1))
+
 # usage: $(eval $(call make-var,FN,DESC,CONTENTS))
 #
 # Create a rule to write $CONTENTS (which should come from a make variable)
@@ -1617,28 +1628,17 @@ LIB_OBJS += $(COMPAT_OBJS)
 # Quote for C
 
 ifdef DEFAULT_EDITOR
-DEFAULT_EDITOR_CQ = "$(subst ",\",$(subst \,\\,$(DEFAULT_EDITOR)))"
-DEFAULT_EDITOR_CQ_SQ = $(subst ','\'',$(DEFAULT_EDITOR_CQ))
-
-BASIC_CFLAGS += -DDEFAULT_EDITOR='$(DEFAULT_EDITOR_CQ_SQ)'
+BASIC_CFLAGS += -DDEFAULT_EDITOR=$(call scq,$(DEFAULT_EDITOR))
 endif
 
 ifdef DEFAULT_PAGER
-DEFAULT_PAGER_CQ = "$(subst ",\",$(subst \,\\,$(DEFAULT_PAGER)))"
-DEFAULT_PAGER_CQ_SQ = $(subst ','\'',$(DEFAULT_PAGER_CQ))
-
-BASIC_CFLAGS += -DDEFAULT_PAGER='$(DEFAULT_PAGER_CQ_SQ)'
+BASIC_CFLAGS += -DDEFAULT_PAGER=$(call scq,$(DEFAULT_PAGER))
 endif
 
 ifdef SHELL_PATH
-SHELL_PATH_CQ = "$(subst ",\",$(subst \,\\,$(SHELL_PATH)))"
-SHELL_PATH_CQ_SQ = $(subst ','\'',$(SHELL_PATH_CQ))
-
-BASIC_CFLAGS += -DSHELL_PATH='$(SHELL_PATH_CQ_SQ)'
+BASIC_CFLAGS += -DSHELL_PATH=$(call scq,$(SHELL_PATH))
 endif
 
-GIT_USER_AGENT_CQ = "$(subst ",\",$(subst \,\\,$(GIT_USER_AGENT)))"
-GIT_USER_AGENT_CQ_SQ = $(subst ','\'',$(GIT_USER_AGENT_CQ))
 $(eval $(call make-var,USER-AGENT,user agent string,$(GIT_USER_AGENT)))
 
 ifdef DEFAULT_HELP_FORMAT
@@ -1723,9 +1723,9 @@ strip: $(PROGRAMS) git$X
 
 git.sp git.s git.o: MAKE/PREFIX
 git.sp git.s git.o: EXTRA_CPPFLAGS = \
-	'-DGIT_HTML_PATH="$(htmldir_relative_SQ)"' \
-	'-DGIT_MAN_PATH="$(mandir_relative_SQ)"' \
-	'-DGIT_INFO_PATH="$(infodir_relative_SQ)"'
+	-DGIT_HTML_PATH=$(call scq,$(htmldir_relative)) \
+	-DGIT_MAN_PATH=$(call scq,$(mandir_relative)) \
+	-DGIT_INFO_PATH=$(call scq,$(infodir_relative))
 
 git$X: git.o MAKE/LDFLAGS $(BUILTIN_OBJS) $(GITLIBS)
 	$(QUIET_LINK)$(CC) $(ALL_CFLAGS) -o $@ git.o \
@@ -1735,14 +1735,14 @@ help.sp help.s help.o: common-cmds.h
 
 builtin/help.sp builtin/help.s builtin/help.o: common-cmds.h MAKE/PREFIX
 builtin/help.sp builtin/help.s builtin/help.o: EXTRA_CPPFLAGS = \
-	'-DGIT_HTML_PATH="$(htmldir_relative_SQ)"' \
-	'-DGIT_MAN_PATH="$(mandir_relative_SQ)"' \
-	'-DGIT_INFO_PATH="$(infodir_relative_SQ)"'
+	-DGIT_HTML_PATH=$(call scq,$(htmldir_relative)) \
+	-DGIT_MAN_PATH=$(call scq,$(mandir_relative)) \
+	-DGIT_INFO_PATH=$(call scq,$(infodir_relative))
 
 version.sp version.s version.o: GIT-VERSION-FILE MAKE/USER-AGENT
 version.sp version.s version.o: EXTRA_CPPFLAGS = \
-	'-DGIT_VERSION="$(GIT_VERSION)"' \
-	'-DGIT_USER_AGENT=$(GIT_USER_AGENT_CQ_SQ)'
+	-DGIT_VERSION=$(call scq,$(GIT_VERSION)) \
+	-DGIT_USER_AGENT=$(call scq,$(GIT_USER_AGENT))
 
 $(BUILT_INS): git$X
 	$(QUIET_BUILT_IN)$(RM) $@ && \
@@ -2020,25 +2020,25 @@ endif
 
 exec_cmd.sp exec_cmd.s exec_cmd.o: MAKE/PREFIX
 exec_cmd.sp exec_cmd.s exec_cmd.o: EXTRA_CPPFLAGS = \
-	'-DGIT_EXEC_PATH="$(gitexecdir_SQ)"' \
-	'-DBINDIR="$(bindir_relative_SQ)"' \
-	'-DPREFIX="$(prefix_SQ)"'
+	-DGIT_EXEC_PATH=$(call scq,$(gitexecdir)) \
+	-DBINDIR=$(call scq,$(bindir_relative)) \
+	-DPREFIX=$(call scq,$(prefix))
 
 builtin/init-db.sp builtin/init-db.s builtin/init-db.o: MAKE/PREFIX
 builtin/init-db.sp builtin/init-db.s builtin/init-db.o: EXTRA_CPPFLAGS = \
-	-DDEFAULT_GIT_TEMPLATE_DIR='"$(template_dir_SQ)"'
+	-DDEFAULT_GIT_TEMPLATE_DIR=$(call scq,$(template_dir))
 
 config.sp config.s config.o: MAKE/PREFIX
 config.sp config.s config.o: EXTRA_CPPFLAGS = \
-	-DETC_GITCONFIG='"$(ETC_GITCONFIG_SQ)"'
+	-DETC_GITCONFIG=$(call scq,$(ETC_GITCONFIG))
 
 attr.sp attr.s attr.o: MAKE/PREFIX
 attr.sp attr.s attr.o: EXTRA_CPPFLAGS = \
-	-DETC_GITATTRIBUTES='"$(ETC_GITATTRIBUTES_SQ)"'
+	-DETC_GITATTRIBUTES=$(call scq,$(ETC_GITATTRIBUTES))
 
 gettext.sp gettext.s gettext.o: MAKE/PREFIX
 gettext.sp gettext.s gettext.o: EXTRA_CPPFLAGS = \
-	-DGIT_LOCALE_PATH='"$(localedir_SQ)"'
+	-DGIT_LOCALE_PATH=$(call scq,$(localedir))
 
 http-push.sp http.sp http-walker.sp remote-curl.sp: SPARSE_FLAGS += \
 	-DCURL_DISABLE_TYPECHECK
