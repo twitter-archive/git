@@ -2,8 +2,8 @@
 
 name=$1; shift
 
-c_quote() {
-	sed 's/\\/\\\\/g; s/"/\\"/'
+c_quote () {
+	sed 's/\\/\\\\/g; s/"/\\"/g'
 }
 
 cat <<-EOF
