@@ -2,8 +2,8 @@
 
 name=$1; shift
 
-quote() {
-	echo "$1" | sed 's/\\/\\\\/g; s/"/\\"/'
+quote () {
+	echo "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
 
 cat <<-EOF
@@ -13,7 +13,8 @@ cat <<-EOF
 static const char *MAKE_${name}[] = {
 EOF
 
-for i in $(cat); do
+for i in $(cat)
+do
 	printf '\t"%s",\n' "$(quote "$i")"
 done
 
