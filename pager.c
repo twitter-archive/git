@@ -1,6 +1,8 @@
 #include "cache.h"
 #include "run-command.h"
 #include "sigchain.h"
+#include "argv-array.h"
+#include "MAKE/PAGER-ENV-array.h"
 
 #ifndef DEFAULT_PAGER
 #define DEFAULT_PAGER "less"
@@ -60,9 +62,26 @@ const char *git_pager(int stdout_is_tty)
 	return pager;
 }
 
+static void setup_pager_env(struct argv_array *env)
+{
+	int i;
+
+	for (i = 0; MAKE_PAGER_ENV[i]; i++) {
+		struct strbuf buf = STRBUF_INIT;
+		const char *p = MAKE_PAGER_ENV[i];
+		const char *eq = strchrnul(p, '=');
+
+		strbuf_add(&buf, p, eq - p);
+		if (!getenv(buf.buf))
+			argv_array_push(env, p);
+		strbuf_release(&buf);
+	}
+}
+
 void setup_pager(void)
 {
 	const char *pager = git_pager(isatty(1));
+	struct argv_array env = ARGV_ARRAY_INIT;
 
 	if (!pager || pager_in_use())
 		return;
@@ -80,17 +99,10 @@ void setup_pager(void)
 	pager_process.use_shell = 1;
 	pager_process.argv = pager_argv;
 	pager_process.in = -1;
-	if (!getenv("LESS") || !getenv("LV")) {
-		static const char *env[3];
-		int i = 0;
 
-		if (!getenv("LESS"))
-			env[i++] = "LESS=FRSX";
-		if (!getenv("LV"))
-			env[i++] = "LV=-c";
-		env[i] = NULL;
-		pager_process.env = env;
-	}
+	setup_pager_env(&env);
+	pager_process.env = argv_array_detach(&env, NULL);
+
 	if (start_command(&pager_process))
 		return;
 

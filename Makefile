@@ -342,6 +342,14 @@ all::
 # Define DEFAULT_HELP_FORMAT to "man", "info" or "html"
 # (defaults to "man") if you want to have a different default when
 # "git help" is called without a parameter specifying the format.
+#
+# Define PAGER_ENV to a SP separated VAR=VAL pairs to define
+# default environment variables to be passed when a pager is spawned, e.g.
+#
+#    PAGER_ENV = LESS=-FRSX LV=-c
+#
+# to say "export LESS=-FRSX (and LV=-c) if the environment variable
+# LESS (and LV) is not set, respectively".
 
 GIT-VERSION-FILE: FORCE
 	@$(SHELL_PATH) ./GIT-VERSION-GEN
@@ -1505,6 +1513,10 @@ ifeq ($(PYTHON_PATH),)
 NO_PYTHON = NoThanks
 endif
 
+ifndef PAGER_ENV
+PAGER_ENV = LESS=-FRSX LV=-c
+endif
+
 QUIET_SUBDIR0  = +$(MAKE) -C # space to separate -C and subdir
 QUIET_SUBDIR1  =
 
@@ -1595,6 +1607,11 @@ endef
 
 MAKE/%-string.h: MAKE/% script/mkcstring
 	$(QUIET_GEN)$(SHELL_PATH) script/mkcstring \
+		$(subst -,_,$*) <$< >$@+ && \
+		mv $@+ $@
+
+MAKE/%-array.h: MAKE/% script/mkcarray
+	$(QUIET_GEN)$(SHELL_PATH) script/mkcarray \
 		$(subst -,_,$*) <$< >$@+ && \
 		mv $@+ $@
 
@@ -1726,6 +1743,9 @@ builtin/help.sp builtin/help.s builtin/help.o: EXTRA_CPPFLAGS = \
 
 version.sp version.s version.o: MAKE/VERSION-string.h MAKE/USER-AGENT-string.h
 
+$(eval $(call make-var,PAGER-ENV,pager environment,$(PAGER_ENV)))
+pager.sp pager.s pager.o: MAKE/PAGER-ENV-array.h
+
 $(BUILT_INS): git$X
 	$(QUIET_BUILT_IN)$(RM) $@ && \
 	ln $< $@ 2>/dev/null || \
@@ -1776,7 +1796,7 @@ $(SCRIPT_LIB) : % : %.sh MAKE/SCRIPT-DEFINES
 	$(QUIET_GEN)$(cmd_munge_script) && \
 	mv $@+ $@
 
-git-sh-setup: MAKE/DIFF.sh
+git-sh-setup: MAKE/DIFF.sh MAKE/PAGER-ENV.sh
 
 git.res: git.rc GIT-VERSION-FILE
 	$(QUIET_RC)$(RC) \
