@@ -1576,7 +1576,7 @@ cq = "$(subst ",\",$(subst \,\\,$1))"
 # usage: $(call scq,CONTENTS)
 #
 # Quote the value as C string inside a shell string. Good for passing strings
-# on the command line via "-DFOO=$(call # scq,$(FOO))".
+# on the command line via "-DFOO=$(call scq,$(FOO))".
 scq = $(call sq,$(call cq,$1))
 
 # usage: $(eval $(call make-var,FN,DESC,CONTENTS))
