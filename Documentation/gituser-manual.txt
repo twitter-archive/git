@@ -1,0 +1,34 @@
+gituser-manual(7)
+=================
+
+NAME
+----
+gituser-manual - a link to the user-manual docbook
+
+
+SYNOPSIS
+--------
+[verse]
+'git help user-manual'
+
+link:user-manual.html[Git User's Manual]
+
+DESCRIPTION
+-----------
+Git is a fast, scalable, distributed revision control system with an
+unusually rich command set that provides both high-level operations
+and full access to internals.
+
+The link:user-manual.html[Git User's Manual] provides an
+in-depth introduction to Git.
+
+SEE ALSO
+--------
+linkgit:gittutorial[7],
+linkgit:giteveryday[7],
+linkgit:gitcli[7],
+linkgit:gitworkflows[7]
+
+GIT
+---
+Part of the linkgit:git[1] suite
