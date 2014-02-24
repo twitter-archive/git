@@ -114,8 +114,8 @@ static void show_path(struct strbuf *base, struct diff_options *opt,
 
 	if (recurse) {
 		strbuf_addch(base, '/');
-		diff_tree_sha1(t1 ? t1->entry.sha1 : NULL,
-			       t2 ? t2->entry.sha1 : NULL, base->buf, opt);
+		__diff_tree_sha1(t1 ? t1->entry.sha1 : NULL,
+				 t2 ? t2->entry.sha1 : NULL, base->buf, opt);
 	}
 
 	strbuf_setlen(base, old_baselen);
