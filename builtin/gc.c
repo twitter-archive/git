@@ -30,11 +30,13 @@ static int aggressive_window = 250;
 static int gc_auto_threshold = 6700;
 static int gc_auto_pack_limit = 50;
 static const char *prune_expire = "2.weeks.ago";
+static const char *prune_repos_expire = "3.months.ago";
 
 static struct argv_array pack_refs_cmd = ARGV_ARRAY_INIT;
 static struct argv_array reflog = ARGV_ARRAY_INIT;
 static struct argv_array repack = ARGV_ARRAY_INIT;
 static struct argv_array prune = ARGV_ARRAY_INIT;
+static struct argv_array prune_repos = ARGV_ARRAY_INIT;
 static struct argv_array rerere = ARGV_ARRAY_INIT;
 
 static char *pidfile;
@@ -80,6 +82,14 @@ static int gc_config(const char *var, const char *value, void *cb)
 				return error(_("Invalid %s: '%s'"), var, value);
 		}
 		return git_config_string(&prune_expire, var, value);
+	}
+	if (!strcmp(var, "gc.prunereposexpire")) {
+		if (value && strcmp(value, "now")) {
+			unsigned long now = approxidate("now");
+			if (approxidate(value) >= now)
+				return error(_("Invalid %s: '%s'"), var, value);
+		}
+		return git_config_string(&prune_repos_expire, var, value);
 	}
 	return git_default_config(var, value, cb);
 }
@@ -274,6 +284,7 @@ int cmd_gc(int argc, const char **argv, const char *prefix)
 	argv_array_pushl(&reflog, "reflog", "expire", "--all", NULL);
 	argv_array_pushl(&repack, "repack", "-d", "-l", NULL);
 	argv_array_pushl(&prune, "prune", "--expire", NULL);
+	argv_array_pushl(&prune_repos, "prune", "--repos", "--expire", NULL);
 	argv_array_pushl(&rerere, "rerere", "gc", NULL);
 
 	git_config(gc_config, NULL);
@@ -332,6 +343,12 @@ int cmd_gc(int argc, const char **argv, const char *prefix)
 			argv_array_push(&prune, "--no-progress");
 		if (run_command_v_opt(prune.argv, RUN_GIT_CMD))
 			return error(FAILED_RUN, prune.argv[0]);
+	}
+
+	if (prune_repos_expire) {
+		argv_array_push(&prune_repos, prune_repos_expire);
+		if (run_command_v_opt(prune_repos.argv, RUN_GIT_CMD))
+			return error(FAILED_RUN, prune_repos.argv[0]);
 	}
 
 	if (run_command_v_opt(rerere.argv, RUN_GIT_CMD))
