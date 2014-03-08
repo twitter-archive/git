@@ -126,6 +126,7 @@ static char *expand_namespace(const char *raw_namespace)
 
 static void setup_git_env(void)
 {
+	struct strbuf sb = STRBUF_INIT;
 	const char *gitfile;
 	const char *shallow_file;
 
@@ -134,12 +135,9 @@ static void setup_git_env(void)
 		git_dir = DEFAULT_GIT_DIR_ENVIRONMENT;
 	gitfile = read_gitfile(git_dir);
 	git_dir = xstrdup(gitfile ? gitfile : git_dir);
-	git_common_dir = getenv(GIT_COMMON_DIR_ENVIRONMENT);
-	if (git_common_dir) {
+	if (get_common_dir(&sb, git_dir))
 		git_common_dir_env = 1;
-		git_common_dir = xstrdup(git_common_dir);
-	} else
-		git_common_dir = git_dir;
+	git_common_dir = strbuf_detach(&sb, NULL);
 	git_object_dir = getenv(DB_ENVIRONMENT);
 	if (!git_object_dir) {
 		git_object_dir = xmalloc(strlen(git_common_dir) + 9);
