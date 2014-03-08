@@ -585,18 +585,21 @@ static void update_refs_for_switch(const struct checkout_opts *opts,
 		if (opts->new_orphan_branch) {
 			if (opts->new_branch_log && !log_all_ref_updates) {
 				int temp;
-				char log_file[PATH_MAX];
-				const char *ref_name = mkpath("refs/heads/%s", opts->new_orphan_branch);
+				struct strbuf log_file = STRBUF_INIT;
+				int ret;
+				const char *ref_name;
 
+				ref_name = mkpath("refs/heads/%s", opts->new_orphan_branch);
 				temp = log_all_ref_updates;
 				log_all_ref_updates = 1;
-				if (log_ref_setup(ref_name, log_file, sizeof(log_file))) {
+				ret = log_ref_setup(ref_name, &log_file);
+				log_all_ref_updates = temp;
+				strbuf_release(&log_file);
+				if (ret) {
 					fprintf(stderr, _("Can not do reflog for '%s'\n"),
 					    opts->new_orphan_branch);
-					log_all_ref_updates = temp;
 					return;
 				}
-				log_all_ref_updates = temp;
 			}
 		}
 		else
@@ -651,14 +654,10 @@ static void update_refs_for_switch(const struct checkout_opts *opts,
 					new->name);
 			}
 		}
-		if (old->path && old->name) {
-			char log_file[PATH_MAX], ref_file[PATH_MAX];
-
-			git_snpath(log_file, sizeof(log_file), "logs/%s", old->path);
-			git_snpath(ref_file, sizeof(ref_file), "%s", old->path);
-			if (!file_exists(ref_file) && file_exists(log_file))
-				remove_path(log_file);
-		}
+		if (old->path && old->name &&
+		    !file_exists(git_path("%s", old->path)) &&
+		     file_exists(git_path("logs/%s", old->path)))
+			remove_path(git_path("logs/%s", old->path));
 	}
 	remove_branch_state();
 	strbuf_release(&msg);
