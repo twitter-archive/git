@@ -1,22 +1,33 @@
-Everyday Git With 20 Commands Or So
-===================================
+giteveryday(7)
+===============
 
-<<Individual Developer (Standalone)>> commands are essential for
+NAME
+----
+giteveryday - A useful minimum set of commands for Everyday Git
+
+SYNOPSIS
+--------
+
+Everyday Git With 20 Commands Or So
+
+DESCRIPTION
+-----------
+<<STANDALONE,Individual Developer (Standalone)>> commands are essential for
 anybody who makes a commit, even for somebody who works alone.
 
 If you work with other people, you will need commands listed in
-the <<Individual Developer (Participant)>> section as well.
+the <<PARTICIPANT,Individual Developer (Participant)>> section as well.
 
-People who play the <<Integrator>> role need to learn some more
+People who play the <<INTEGRATOR,Integrator>> role need to learn some more
 commands in addition to the above.
 
-<<Repository Administration>> commands are for system
+<<ADMINISTRATION,Repository Administration>> commands are for system
 administrators who are responsible for the care and feeding
 of Git repositories.
 
 
-Individual Developer (Standalone)[[Individual Developer (Standalone)]]
-----------------------------------------------------------------------
+Individual Developer (Standalone)[[STANDALONE]]
+-----------------------------------------------
 
 A standalone individual developer does not exchange patches with
 other people, and works alone in a single repository, using the
@@ -104,8 +115,8 @@ combined and include `--max-count=10` (show 10 commits),
 directory, since `v2.43` tag.
 
 
-Individual Developer (Participant)[[Individual Developer (Participant)]]
-------------------------------------------------------------------------
+Individual Developer (Participant)[[PARTICIPANT]]
+-------------------------------------------------
 
 A developer working as a participant in a group project needs to
 learn how to communicate with others, and uses these commands in
@@ -205,7 +216,7 @@ tag.
 without a formal "merging".
 
 
-Integrator[[Integrator]]
+Integrator[[INTEGRATOR]]
 ------------------------
 
 A fairly central person acting as the integrator in a group
@@ -292,8 +303,8 @@ everything `ko-next` has.
 <13> push the tag out, too.
 
 
-Repository Administration[[Repository Administration]]
-------------------------------------------------------
+Repository Administration[[ADMINISTRATION]]
+-------------------------------------------
 
 A repository administrator uses the following tools to set up
 and maintain access to the repository by developers.
@@ -411,3 +422,7 @@ ftp> cp -r .git /home/user/myproject.git
 +
 <1> make sure your info/refs and objects/info/packs are up-to-date
 <2> upload to public HTTP server hosted by your ISP.
+
+GIT
+---
+Part of the linkgit:git[1] suite
