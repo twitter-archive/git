@@ -80,8 +80,9 @@ static char *work_tree;
 static const char *namespace;
 static size_t namespace_len;
 
-static const char *git_dir;
+static const char *git_dir, *git_common_dir;
 static char *git_object_dir, *git_index_file, *git_graft_file;
+int git_db_env, git_index_env, git_graft_env, git_common_dir_env;
 
 /*
  * Repository-local GIT_* environment variables; see cache.h for details.
@@ -125,6 +126,7 @@ static char *expand_namespace(const char *raw_namespace)
 
 static void setup_git_env(void)
 {
+	struct strbuf sb = STRBUF_INIT;
 	const char *gitfile;
 	const char *shallow_file;
 
@@ -133,19 +135,26 @@ static void setup_git_env(void)
 		git_dir = DEFAULT_GIT_DIR_ENVIRONMENT;
 	gitfile = read_gitfile(git_dir);
 	git_dir = xstrdup(gitfile ? gitfile : git_dir);
+	if (get_common_dir(&sb, git_dir))
+		git_common_dir_env = 1;
+	git_common_dir = strbuf_detach(&sb, NULL);
 	git_object_dir = getenv(DB_ENVIRONMENT);
 	if (!git_object_dir) {
-		git_object_dir = xmalloc(strlen(git_dir) + 9);
-		sprintf(git_object_dir, "%s/objects", git_dir);
-	}
+		git_object_dir = xmalloc(strlen(git_common_dir) + 9);
+		sprintf(git_object_dir, "%s/objects", git_common_dir);
+	} else
+		git_db_env = 1;
 	git_index_file = getenv(INDEX_ENVIRONMENT);
 	if (!git_index_file) {
 		git_index_file = xmalloc(strlen(git_dir) + 7);
 		sprintf(git_index_file, "%s/index", git_dir);
-	}
+	} else
+		git_index_env = 1;
 	git_graft_file = getenv(GRAFT_ENVIRONMENT);
 	if (!git_graft_file)
 		git_graft_file = git_pathdup("info/grafts");
+	else
+		git_graft_env = 1;
 	if (getenv(NO_REPLACE_OBJECTS_ENVIRONMENT))
 		check_replace_refs = 0;
 	namespace = expand_namespace(getenv(GIT_NAMESPACE_ENVIRONMENT));
@@ -166,6 +175,11 @@ const char *get_git_dir(void)
 	if (!git_dir)
 		setup_git_env();
 	return git_dir;
+}
+
+const char *get_git_common_dir(void)
+{
+	return git_common_dir;
 }
 
 const char *get_git_namespace(void)

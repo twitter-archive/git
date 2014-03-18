@@ -112,6 +112,70 @@ static void prune_object_dir(const char *path)
 	}
 }
 
+static const char *prune_repo_dir(const char *id, struct stat *st)
+{
+	char *path;
+	int fd, len;
+	if (file_exists(git_path("repos/%s/locked", id)))
+		return NULL;
+	if (stat(git_path("repos/%s/gitdir", id), st)) {
+		st->st_mtime = expire;
+		return _("gitdir does not exist");
+	}
+	fd = open(git_path("repos/%s/gitdir", id), O_RDONLY);
+	len = st->st_size;
+	path = xmalloc(len + 1);
+	read_in_full(fd, path, len);
+	close(fd);
+	while (path[len - 1] == '\n' || path[len - 1] == '\r')
+		len--;
+	path[len] = '\0';
+	if (!file_exists(path)) {
+		struct stat st_link;
+		free(path);
+		/*
+		 * the repo is moved manually and has not been
+		 * accessed since?
+		 */
+		if (!stat(git_path("repos/%s/link", id), &st_link) &&
+		    st_link.st_nlink > 1)
+			return NULL;
+		return _("gitdir points to non-existing file");
+	}
+	free(path);
+	return NULL;
+}
+
+static void prune_repos_dir(void)
+{
+	const char *reason;
+	DIR *dir = opendir(git_path("repos"));
+	struct dirent *d;
+	int removed = 0;
+	struct stat st;
+	if (!dir)
+		return;
+	while ((d = readdir(dir)) != NULL) {
+		if (!strcmp(d->d_name, ".") || !strcmp(d->d_name, ".."))
+			continue;
+		if ((reason = prune_repo_dir(d->d_name, &st)) != NULL &&
+		    st.st_mtime <= expire) {
+			struct strbuf sb = STRBUF_INIT;
+			if (show_only || verbose)
+				printf(_("Removing repos/%s: %s\n"), d->d_name, reason);
+			if (show_only)
+				continue;
+			strbuf_addstr(&sb, git_path("repos/%s", d->d_name));
+			remove_dir_recursively(&sb, 0);
+			strbuf_release(&sb);
+			removed = 1;
+		}
+	}
+	closedir(dir);
+	if (removed)
+		rmdir(git_path("repos"));
+}
+
 /*
  * Write errors (particularly out of space) can result in
  * failed temporary packs (and more rarely indexes and other
@@ -138,10 +202,12 @@ int cmd_prune(int argc, const char **argv, const char *prefix)
 {
 	struct rev_info revs;
 	struct progress *progress = NULL;
+	int prune_repos = 0;
 	const struct option options[] = {
 		OPT__DRY_RUN(&show_only, N_("do not remove, show only")),
 		OPT__VERBOSE(&verbose, N_("report pruned objects")),
 		OPT_BOOL(0, "progress", &show_progress, N_("show progress")),
+		OPT_BOOL(0, "repos", &prune_repos, N_("prune .git/repos/")),
 		OPT_EXPIRY_DATE(0, "expire", &expire,
 				N_("expire objects older than <time>")),
 		OPT_END()
@@ -154,6 +220,14 @@ int cmd_prune(int argc, const char **argv, const char *prefix)
 	init_revisions(&revs, prefix);
 
 	argc = parse_options(argc, argv, prefix, options, prune_usage, 0);
+
+	if (prune_repos) {
+		if (argc)
+			die(_("--repos does not take extra arguments"));
+		prune_repos_dir();
+		return 0;
+	}
+
 	while (argc--) {
 		unsigned char sha1[20];
 		const char *name = *argv++;
