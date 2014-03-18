@@ -16,6 +16,8 @@ static struct string_list config_name_for_path;
 static struct string_list config_fetch_recurse_submodules_for_name;
 static struct string_list config_ignore_for_name;
 static int config_fetch_recurse_submodules = RECURSE_SUBMODULES_ON_DEMAND;
+static int config_update_recurse_submodules = RECURSE_SUBMODULES_OFF;
+static int option_update_recurse_submodules = RECURSE_SUBMODULES_DEFAULT;
 static struct string_list changed_submodule_paths;
 static int initialized_fetch_ref_tips;
 static struct sha1_array ref_tips_before_fetch;
@@ -359,6 +361,157 @@ int parse_fetch_recurse_submodules_arg(const char *opt, const char *arg)
 	}
 }
 
+int parse_update_recurse_submodules_arg(const char *opt, const char *arg)
+{
+	switch (git_config_maybe_bool(opt, arg)) {
+	case 1:
+		return RECURSE_SUBMODULES_ON;
+	case 0:
+		return RECURSE_SUBMODULES_OFF;
+	default:
+		if (!strcmp(arg, "checkout"))
+			return RECURSE_SUBMODULES_ON;
+		die("bad %s argument: %s", opt, arg);
+	}
+}
+
+int option_parse_update_submodules(const struct option *opt,
+				   const char *arg, int unset)
+{
+	if (unset) {
+		*(int *)opt->value = RECURSE_SUBMODULES_OFF;
+	} else {
+		if (arg)
+			*(int *)opt->value = parse_update_recurse_submodules_arg(opt->long_name, arg);
+		else
+			*(int *)opt->value = RECURSE_SUBMODULES_ON;
+	}
+	return 0;
+}
+
+int submodule_needs_update(const char *path)
+{
+	struct string_list_item *path_option;
+	path_option = unsorted_string_list_lookup(&config_name_for_path, path);
+	if (!path_option)
+		return 0;
+
+	/* update can't be "none", "merge" or "rebase" */
+
+	if (option_update_recurse_submodules != RECURSE_SUBMODULES_DEFAULT)
+		return 1;
+	return config_update_recurse_submodules != RECURSE_SUBMODULES_OFF;
+}
+
+int populate_submodule(const char *path, unsigned char sha1[20], int force)
+{
+	struct string_list_item *path_option;
+	const char *name, *real_git_dir;
+	struct strbuf buf = STRBUF_INIT;
+	struct child_process cp;
+	const char *argv[] = {"read-tree", force ? "--reset" : "-m", "-u", NULL, NULL};
+
+	path_option = unsorted_string_list_lookup(&config_name_for_path, path);
+	if (!path_option)
+		return 0;
+
+	name = path_option->util;
+
+	strbuf_addf(&buf, "%s/modules/%s", resolve_gitdir(get_git_dir()), name);
+	real_git_dir = resolve_gitdir(buf.buf);
+	if (!real_git_dir)
+		goto out;
+	connect_work_tree_and_git_dir(path, real_git_dir);
+
+	/* Run read-tree --reset sha1 */
+	memset(&cp, 0, sizeof(cp));
+	cp.argv = argv;
+	cp.env = local_repo_env;
+	cp.git_cmd = 1;
+	cp.no_stdin = 1;
+	cp.dir = path;
+	argv[3] = sha1_to_hex(sha1);
+	if (run_command(&cp))
+		warning(_("Checking out submodule %s failed"), path);
+
+out:
+	strbuf_release(&buf);
+	return 0;
+}
+
+int depopulate_submodule(const char *path)
+{
+	struct strbuf dot_git = STRBUF_INIT;
+	struct child_process cp;
+	const char *argv[] = {"rm", "-rf", path, NULL};
+
+	/* Is it populated? */
+	strbuf_addf(&dot_git, "%s/.git", path);
+	if (!resolve_gitdir(dot_git.buf)) {
+		strbuf_release(&dot_git);
+		return 0;
+	}
+	strbuf_release(&dot_git);
+
+	/* Does it have a .git directory? */
+	if (!submodule_uses_gitfile(path)) {
+		warning(_("cannot remove submodule '%s' because it (or one of "
+			  "its nested submodules) uses a .git directory"),
+			  path);
+		return -1;
+	}
+
+	/* Remove the whole submodule directory */
+	memset(&cp, 0, sizeof(cp));
+	cp.argv = argv;
+	cp.env = local_repo_env;
+	cp.git_cmd = 0;
+	cp.no_stdin = 1;
+	if (run_command(&cp)) {
+		warning("Could not remove submodule %s", path);
+		strbuf_release(&dot_git);
+		return -1;
+	}
+
+	return 0;
+}
+
+int update_submodule(const char *path, const unsigned char sha1[20], int force)
+{
+	struct strbuf buf = STRBUF_INIT;
+	struct child_process cp;
+	const char *hex_sha1 = sha1_to_hex(sha1);
+	const char *argv[] = {
+		"checkout",
+		force ? "-fq" : "-q",
+		hex_sha1,
+		NULL,
+	};
+	const char *git_dir;
+
+	strbuf_addf(&buf, "%s/.git", path);
+	git_dir = read_gitfile(buf.buf);
+	if (!git_dir)
+		git_dir = buf.buf;
+	if (!is_directory(git_dir)) {
+		strbuf_release(&buf);
+		/* The submodule is not populated, so we can't check it out */
+		return 0;
+	}
+	strbuf_release(&buf);
+
+	memset(&cp, 0, sizeof(cp));
+	cp.argv = argv;
+	cp.env = local_repo_env;
+	cp.git_cmd = 1;
+	cp.no_stdin = 1;
+	cp.dir = path;   /* GIT_WORK_TREE doesn't work for git checkout */
+	if (run_command(&cp))
+		return error("Could not checkout submodule %s", path);
+
+	return 0;
+}
+
 void show_submodule_summary(FILE *f, const char *path,
 		const char *line_prefix,
 		unsigned char one[20], unsigned char two[20],
@@ -564,6 +717,12 @@ int push_unpushed_submodules(unsigned char new_sha1[20], const char *remotes_nam
 	string_list_clear(&needs_pushing, 0);
 
 	return ret;
+}
+
+void set_config_update_recurse_submodules(int default_value, int option_value)
+{
+	config_update_recurse_submodules = default_value;
+	option_update_recurse_submodules = option_value;
 }
 
 static int is_submodule_commit_present(const char *path, unsigned char sha1[20])
@@ -794,6 +953,17 @@ out:
 	return result;
 }
 
+int is_submodule_populated(const char *path)
+{
+	int retval = 0;
+	struct strbuf gitdir = STRBUF_INIT;
+	strbuf_addf(&gitdir, "%s/.git", path);
+	if (resolve_gitdir(gitdir.buf))
+		retval = 1;
+	strbuf_release(&gitdir);
+	return retval;
+}
+
 unsigned is_submodule_modified(const char *path, int ignore_untracked)
 {
 	ssize_t len;
@@ -941,6 +1111,45 @@ int ok_to_remove_submodule(const char *path)
 
 	strbuf_release(&buf);
 	return ok_to_remove;
+}
+
+unsigned is_submodule_checkout_safe(const char *path, const unsigned char sha1[20])
+{
+	struct strbuf buf = STRBUF_INIT;
+	struct child_process cp;
+	const char *hex_sha1 = sha1_to_hex(sha1);
+	const char *argv[] = {
+		"read-tree",
+		"-n",
+		"-m",
+		"HEAD",
+		hex_sha1,
+		NULL,
+	};
+	const char *git_dir;
+
+	strbuf_addf(&buf, "%s/.git", path);
+	git_dir = read_gitfile(buf.buf);
+	if (!git_dir)
+		git_dir = buf.buf;
+	if (!is_directory(git_dir)) {
+		strbuf_release(&buf);
+		/* The submodule is not populated, it's safe to check it out */
+		/*
+		 * TODO: When git learns to re-populate submodules, a check must be
+		 * added here to assert that no local files will be overwritten.
+		 */
+		return 1;
+	}
+	strbuf_release(&buf);
+
+	memset(&cp, 0, sizeof(cp));
+	cp.argv = argv;
+	cp.env = local_repo_env;
+	cp.git_cmd = 1;
+	cp.no_stdin = 1;
+	cp.dir = path;
+	return run_command(&cp) == 0;
 }
 
 static int find_first_merges(struct object_array *result, const char *path,
@@ -1111,18 +1320,19 @@ void connect_work_tree_and_git_dir(const char *work_tree, const char *git_dir)
 {
 	struct strbuf file_name = STRBUF_INIT;
 	struct strbuf rel_path = STRBUF_INIT;
+	const char *real_git_dir = xstrdup(real_path(git_dir));
 	const char *real_work_tree = xstrdup(real_path(work_tree));
 
 	/* Update gitfile */
 	strbuf_addf(&file_name, "%s/.git", work_tree);
 	write_file(file_name.buf, 1, "gitdir: %s\n",
-		   relative_path(git_dir, real_work_tree, &rel_path));
+		   relative_path(real_git_dir, real_work_tree, &rel_path));
 
 	/* Update core.worktree setting */
 	strbuf_reset(&file_name);
-	strbuf_addf(&file_name, "%s/config", git_dir);
+	strbuf_addf(&file_name, "%s/config", real_git_dir);
 	if (git_config_set_in_file(file_name.buf, "core.worktree",
-				   relative_path(real_work_tree, git_dir,
+				   relative_path(real_work_tree, real_git_dir,
 						 &rel_path)))
 		die(_("Could not set core.worktree in %s"),
 		    file_name.buf);
@@ -1130,4 +1340,5 @@ void connect_work_tree_and_git_dir(const char *work_tree, const char *git_dir)
 	strbuf_release(&file_name);
 	strbuf_release(&rel_path);
 	free((void *)real_work_tree);
+	free((void *)real_git_dir);
 }

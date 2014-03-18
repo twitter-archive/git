@@ -2,6 +2,7 @@
 #include "blob.h"
 #include "dir.h"
 #include "streaming.h"
+#include "submodule.h"
 
 static void create_directories(const char *path, int path_len,
 			       const struct checkout *state)
@@ -203,6 +204,9 @@ static int write_entry(struct cache_entry *ce,
 			return error("cannot create temporary submodule %s", path);
 		if (mkdir(path, 0777) < 0)
 			return error("cannot create submodule directory %s", path);
+		if (submodule_needs_update(path) &&
+		    populate_submodule(path, ce->sha1, state->force))
+			return error("cannot checkout submodule %s", path);
 		break;
 	default:
 		return error("unknown file mode for %s in index", path);
@@ -257,7 +261,7 @@ int checkout_entry(struct cache_entry *ce,
 
 	if (!check_path(path.buf, path.len, &st, state->base_dir_len)) {
 		unsigned changed = ce_match_stat(ce, &st, CE_MATCH_IGNORE_VALID|CE_MATCH_IGNORE_SKIP_WORKTREE);
-		if (!changed)
+		if (!changed && (!S_ISDIR(st.st_mode) || !S_ISGITLINK(ce->ce_mode)))
 			return 0;
 		if (!state->force) {
 			if (!state->quiet)
@@ -274,9 +278,18 @@ int checkout_entry(struct cache_entry *ce,
 		 * just do the right thing)
 		 */
 		if (S_ISDIR(st.st_mode)) {
-			/* If it is a gitlink, leave it alone! */
-			if (S_ISGITLINK(ce->ce_mode))
+			if (S_ISGITLINK(ce->ce_mode)) {
+				if (submodule_needs_update(ce->name)) {
+					if (is_submodule_populated(ce->name)) {
+						if (update_submodule(ce->name, ce->sha1, state->force))
+							return error("cannot checkout submodule %s", path.buf);
+					} else {
+						if (populate_submodule(path.buf, ce->sha1, state->force))
+							return error("cannot populate submodule %s", path.buf);
+					}
+				}
 				return 0;
+			}
 			if (!state->force)
 				return error("%s is a directory", path.buf);
 			remove_subtree(&path);
