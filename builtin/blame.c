@@ -45,6 +45,7 @@ static int incremental;
 static int xdl_opts;
 static int abbrev = -1;
 static int no_whole_file_rename;
+static int prefer_first;
 
 static enum date_mode blame_date_mode = DATE_ISO8601;
 static size_t blame_date_width;
@@ -1225,7 +1226,8 @@ static void pass_blame(struct scoreboard *sb, struct origin *origin, int opt)
 			porigin = find(sb, p, origin);
 			if (!porigin)
 				continue;
-			if (!hashcmp(porigin->blob_sha1, origin->blob_sha1)) {
+			if (!prefer_first &&
+			    !hashcmp(porigin->blob_sha1, origin->blob_sha1)) {
 				pass_whole_blame(sb, origin, porigin);
 				origin_decref(porigin);
 				goto finish;
@@ -2240,7 +2242,8 @@ int cmd_blame(int argc, const char **argv, const char *prefix)
 	static const char *contents_from = NULL;
 	static const struct option options[] = {
 		OPT_BOOL(0, "incremental", &incremental, N_("Show blame entries as we find them, incrementally")),
-		OPT_BOOL('b', NULL, &blank_boundary, N_("Show blank SHA-1 for boundary commits (Default: off)")),
+		OPT_BOOL(0, "prefer-first", &prefer_first, N_("Prefer blaming commits merged earlier")),
+		OPT_BOOL('b', NULL, &blank_boundary, N_("Show blank SHA-1 for boundary commits (Default: ff)")),
 		OPT_BOOL(0, "root", &show_root, N_("Do not treat root commits as boundaries (Default: off)")),
 		OPT_BOOL(0, "show-stats", &show_stats, N_("Show work cost statistics")),
 		OPT_BIT(0, "score-debug", &output_option, N_("Show output score for blame entries"), OUTPUT_SHOW_SCORE),

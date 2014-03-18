@@ -48,6 +48,12 @@ include::line-range-format.txt[]
 	Show the result incrementally in a format designed for
 	machine consumption.
 
+--prefer-first::
+	If a line was introduced by two commits (for example via
+	a merged cherry-pick), prefer the commit that was
+	first merged in the history of always following the
+	first parent.
+
 --encoding=<encoding>::
 	Specifies the encoding used to output author names
 	and commit summaries. Setting it to `none` makes blame
