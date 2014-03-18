@@ -625,6 +625,9 @@ def list_head(repo, cur):
 def do_list(parser):
     repo = parser.repo
     for bmark, node in bookmarks.listbookmarks(repo).iteritems():
+        if node == '0000000000000000000000000000000000000000':
+            warn("Ignoring invalid bookmark '%s'", bmark)
+            continue
         bmarks[bmark] = repo[node]
 
     cur = repo.dirstate.branch()
