@@ -156,4 +156,16 @@ test_expect_success 'rename pretty print common prefix and suffix overlap' '
 	test_i18ngrep " d/f/{ => f}/e " output
 '
 
+test_expect_success 'rename of very long path shows =>' '
+	mkdir long_dirname_that_does_not_fit_in_a_single_line &&
+	mkdir another_extremely_long_path_but_not_the_same_as_the_first &&
+	cp path1 long_dirname*/ &&
+	git add long_dirname*/path1 &&
+	test_commit add_long_pathname &&
+	git mv long_dirname*/path1 another_extremely_*/ &&
+	test_commit move_long_pathname &&
+	git diff -M --stat HEAD^ HEAD >output &&
+	grep "=>.*path1" output
+'
+
 test_done
