@@ -428,6 +428,7 @@ static struct {
 	{ "modules", N_("Defining submodule properties") },
 	{ "revisions", N_("Specifying revisions and ranges for Git") },
 	{ "tutorial", N_("A tutorial introduction to Git (for version 1.5.1 or newer)") },
+	{ "user-manual", N_("A link to the user-manual docbook") },
 	{ "workflows", N_("An overview of recommended workflows with Git") },
 };
 
