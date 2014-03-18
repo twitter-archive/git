@@ -51,6 +51,7 @@ static struct branch *current_branch;
 static const char *default_remote_name;
 static const char *branch_pushremote_name;
 static const char *pushremote_name;
+static const char *pushremote_config_default;
 static int explicit_default_remote_name;
 
 static struct rewrites rewrites;
@@ -352,6 +353,8 @@ static int handle_config(const char *key, const char *value, void *cb)
 				explicit_default_remote_name = 1;
 			}
 		} else if (!strcmp(subkey, ".pushremote")) {
+			if (git_config_string(&branch->pushremote_name, key, value))
+				return -1;
 			if (branch == current_branch)
 				if (git_config_string(&branch_pushremote_name, key, value))
 					return -1;
@@ -386,8 +389,12 @@ static int handle_config(const char *key, const char *value, void *cb)
 	name = key + 7;
 
 	/* Handle remote.* variables */
-	if (!strcmp(name, "pushdefault"))
-		return git_config_string(&pushremote_name, key, value);
+	if (!strcmp(name, "pushdefault")) {
+		if (git_config_string(&pushremote_config_default, key, value) < 0)
+			return -1;
+		pushremote_name = pushremote_config_default;
+		return 0;
+	}
 
 	/* Handle remote.<name>.* variables */
 	if (*name == '/') {
@@ -1621,7 +1628,10 @@ struct branch *branch_get(const char *name)
 		ret = current_branch;
 	else
 		ret = make_branch(name, 0);
-	if (ret && ret->remote_name) {
+	if (!ret)
+		return NULL;
+
+	if (ret->remote_name) {
 		ret->remote = remote_get(ret->remote_name);
 		if (ret->merge_nr) {
 			int i;
@@ -1635,6 +1645,16 @@ struct branch *branch_get(const char *name)
 			}
 		}
 	}
+
+	if (ret->pushremote_name)
+		ret->pushremote = remote_get(ret->pushremote_name);
+	else if (pushremote_config_default)
+		ret->pushremote = remote_get(pushremote_config_default);
+	else if (ret->remote_name)
+		ret->pushremote = remote_get(ret->remote_name);
+	else
+		ret->pushremote = remote_get(NULL);
+
 	return ret;
 }
 

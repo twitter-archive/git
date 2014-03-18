@@ -200,6 +200,8 @@ struct branch {
 
 	const char *remote_name;
 	struct remote *remote;
+	const char *pushremote_name;
+	struct remote *pushremote;
 
 	const char **merge_name;
 	struct refspec **merge;
