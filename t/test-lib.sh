@@ -48,7 +48,7 @@ then
 	exit 1
 fi
 
-. "$GIT_BUILD_DIR"/GIT-BUILD-OPTIONS
+. "$GIT_BUILD_DIR"/MAKE/BUILD-OPTIONS
 export PERL_PATH SHELL_PATH
 
 # if --tee was passed, write the output not only to the terminal, but

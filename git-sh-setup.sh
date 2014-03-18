@@ -160,10 +160,11 @@ git_pager() {
 	else
 		GIT_PAGER=cat
 	fi
-	: ${LESS=-FRSX}
-	: ${LV=-c}
-	export LESS LV
-
+	for vardef in $MAKE_PAGER_ENV
+	do
+		var=${vardef%%=*}
+		eval ": \${$vardef} && export $var"
+	done
 	eval "$GIT_PAGER" '"$@"'
 }
 
@@ -287,7 +288,7 @@ clear_local_git_env() {
 # remove lines from $1 that are not in $2, leaving only common lines.
 create_virtual_base() {
 	sz0=$(wc -c <"$1")
-	@@DIFF@@ -u -La/"$1" -Lb/"$1" "$1" "$2" | git apply --no-add
+	$MAKE_DIFF -u -La/"$1" -Lb/"$1" "$1" "$2" | git apply --no-add
 	sz1=$(wc -c <"$1")
 
 	# If we do not have enough common material, it is not
