@@ -258,7 +258,9 @@ test_expect_success 'git diff between submodule commits' '
 	expect_from_to >expect.body $subtip $subprev &&
 	test_cmp expect.body actual.body &&
 	git diff --ignore-submodules HEAD^..HEAD >actual &&
-	! test -s actual
+	sed -e "1,/^@@/d" actual >actual.body &&
+	expect_from_to >expect.body $subtip $subprev &&
+	test_cmp expect.body actual.body
 '
 
 test_expect_success 'git diff between submodule commits [.git/config]' '
@@ -274,7 +276,9 @@ test_expect_success 'git diff between submodule commits [.git/config]' '
 	test_cmp expect.body actual.body &&
 	git config submodule.subname.ignore all &&
 	git diff HEAD^..HEAD >actual &&
-	! test -s actual &&
+	sed -e "1,/^@@/d" actual >actual.body &&
+	expect_from_to >expect.body $subtip $subprev &&
+	test_cmp expect.body actual.body &&
 	git diff --ignore-submodules=dirty HEAD^..HEAD >actual &&
 	sed -e "1,/^@@/d" actual >actual.body &&
 	expect_from_to >expect.body $subtip $subprev &&
@@ -294,7 +298,9 @@ test_expect_success 'git diff between submodule commits [.gitmodules]' '
 	test_cmp expect.body actual.body &&
 	git config -f .gitmodules submodule.subname.ignore all &&
 	git diff HEAD^..HEAD >actual &&
-	! test -s actual &&
+	sed -e "1,/^@@/d" actual >actual.body &&
+	expect_from_to >expect.body $subtip $subprev &&
+	test_cmp expect.body actual.body &&
 	git config submodule.subname.ignore dirty &&
 	git config submodule.subname.path sub &&
 	git diff  HEAD^..HEAD >actual &&

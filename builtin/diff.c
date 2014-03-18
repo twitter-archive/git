@@ -168,6 +168,8 @@ static int builtin_diff_tree(struct rev_info *revs,
 	if (argc > 1)
 		usage(builtin_diff_usage);
 
+	enforce_no_complete_ignore_submodule(&revs->diffopt);
+
 	/*
 	 * We saw two trees, ent0 and ent1.  If ent1 is uninteresting,
 	 * swap them.
