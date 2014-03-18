@@ -20,14 +20,14 @@ q             quiet
 d             show debug messages
 P,prefix=     the name of the subdir to split out
 m,message=    use the given message as the commit message for the merge commit
+squash        merge subtree changes as a single commit
+edit          allow user to edit squash commit message interactively
  options for 'split'
 annotate=     add a prefix to commit message of new commits
 b,branch=     create a new branch from the split subtree
 ignore-joins  ignore prior --rejoin commits
 onto=         try connecting new tree to an existing one
 rejoin        merge the new branch back into HEAD
- options for 'add', 'merge', 'pull' and 'push'
-squash        merge subtree changes as a single commit
 "
 eval "$(echo "$OPTS_SPEC" | git rev-parse --parseopt -- "$@" || echo exit $?)"
 
@@ -46,6 +46,7 @@ ignore_joins=
 annotate=
 squash=
 message=
+edit=
 prefix=
 
 debug()
@@ -93,6 +94,7 @@ while [ $# -gt 0 ]; do
 		--ignore-joins) ignore_joins=1 ;;
 		--no-ignore-joins) ignore_joins= ;;
 		--squash) squash=1 ;;
+		--edit) edit=1 ;;
 		--no-squash) squash= ;;
 		--) break ;;
 		*) die "Unexpected option: $opt" ;;
@@ -230,13 +232,19 @@ find_latest_squash()
 	sq=
 	main=
 	sub=
+	par1=
+	par2=
 	git log --grep="^git-subtree-dir: $dir/*\$" \
-		--pretty=format:'START %H%n%s%n%n%b%nEND%n' HEAD |
-	while read a b junk; do
-		debug "$a $b $junk"
+		--pretty=format:'START %H %P%n%s%n%n%b%nEND%n' HEAD |
+	while read a b c d junk; do
+		debug "$a $b $c $d $junk"
 		debug "{{$sq/$main/$sub}}"
 		case "$a" in
-			START) sq="$b" ;;
+			START)
+				sq="$b"
+				par1="$c"
+				par2="$d"
+				;;
 			git-subtree-mainline:) main="$b" ;;
 			git-subtree-split:) sub="$b" ;;
 			END)
@@ -244,7 +252,8 @@ find_latest_squash()
 					if [ -n "$main" ]; then
 						# a rejoin commit?
 						# Pretend its sub was a squash.
-						sq="$sub"
+						assert [ "$main" = "$par1" ]
+						sq="$par2"
 					fi
 					debug "Squash found: $sq $sub"
 					echo "$sq" "$sub"
@@ -253,6 +262,8 @@ find_latest_squash()
 				sq=
 				main=
 				sub=
+				par1=
+				par2=
 				;;
 		esac
 	done
@@ -427,13 +438,12 @@ new_squash_commit()
 	old="$1"
 	oldsub="$2"
 	newsub="$3"
+	msg_file="$4"
 	tree=$(toptree_for_commit $newsub) || exit $?
 	if [ -n "$old" ]; then
-		squash_msg "$dir" "$oldsub" "$newsub" | 
-			git commit-tree "$tree" -p "$old" || exit $?
+		git commit-tree "$tree" -p "$old" -F "$msg_file" || exit $?
 	else
-		squash_msg "$dir" "" "$newsub" |
-			git commit-tree "$tree" || exit $?
+		git commit-tree "$tree" -F "$msg_file" || exit $?
 	fi
 }
 
@@ -554,7 +564,13 @@ cmd_add_commit()
 	fi
 	
 	if [ -n "$squash" ]; then
-		rev=$(new_squash_commit "" "" "$rev") || exit $?
+		msg_file="$GIT_DIR/COMMIT_EDITMSG"
+		squash_msg "$dir" "" "$rev" >"$msg_file"
+		if [ -n "$edit" ]; then
+			git_editor "$msg_file"
+		fi
+		rev=$(new_squash_commit "" "" "$rev" "$msg_file") || exit $?
+		rm -f "$msg_file"
 		commit=$(add_squashed_msg "$rev" "$dir" |
 			 git commit-tree $tree $headp -p "$rev") || exit $?
 	else
@@ -571,6 +587,13 @@ cmd_split()
 	debug "Splitting $dir..."
 	cache_setup || exit $?
 	
+	if [ -n "$rejoin" ]; then
+		ensure_clean
+		if [ -n "$squash" ]; then
+			first_split="$(find_latest_squash "$dir")"
+		fi
+	fi
+
 	if [ -n "$onto" ]; then
 		debug "Reading history for --onto=$onto..."
 		git rev-list $onto |
@@ -636,13 +659,6 @@ cmd_split()
 		die "No new revisions were found"
 	fi
 	
-	if [ -n "$rejoin" ]; then
-		debug "Merging split branch into HEAD..."
-		latest_old=$(cache_get latest_old)
-		git merge -s ours \
-			-m "$(rejoin_msg $dir $latest_old $latest_new)" \
-			$latest_new >&2 || exit $?
-	fi
 	if [ -n "$branch" ]; then
 		if rev_exists "refs/heads/$branch"; then
 			if ! rev_is_descendant_of_branch $latest_new $branch; then
@@ -654,6 +670,36 @@ cmd_split()
 		fi
 		git update-ref -m 'subtree split' "refs/heads/$branch" $latest_new || exit $?
 		say "$action branch '$branch'"
+	fi
+	if [ -n "$rejoin" ]; then
+		debug "Merging split branch into HEAD..."
+		latest_old=$(cache_get latest_old)
+		new=$latest_new
+
+		if [ -n "$squash" ]; then
+			debug "Squashing split branch."
+
+			set $first_split
+			old=$1
+			sub=$2
+			if [ "$sub" = "$latest_new" ]; then
+				say "Subtree is already at commit $latest_new."
+				exit 0
+			fi
+			msg_file="$GIT_DIR/COMMIT_EDITMSG"
+			squash_msg "$dir" "$sub" "$latest_new" >"$msg_file"
+			if [ -n "$edit" ]; then
+				git_editor "$msg_file"
+			fi
+			new=$(new_squash_commit "$old" "$sub" "$latest_new" \
+						"$msg_file") || exit $?
+			rm -f "$msg_file"
+			debug "New squash commit: $new"
+		fi
+
+		git merge -s ours -m \
+			"$(rejoin_msg $dir $latest_old $latest_new)" \
+			$new >&2 || exit $?
 	fi
 	echo $latest_new
 	exit 0
@@ -682,7 +728,13 @@ cmd_merge()
 			say "Subtree is already at commit $rev."
 			exit 0
 		fi
-		new=$(new_squash_commit "$old" "$sub" "$rev") || exit $?
+		msg_file="$GIT_DIR/COMMIT_EDITMSG"
+		squash_msg "$dir" "$sub" "$rev" >"$msg_file"
+		if [ -n "$edit" ]; then
+			git_editor "$msg_file"
+		fi
+		new=$(new_squash_commit "$old" "$sub" "$rev" "$msg_file") || exit $?
+		rm -f "$msg_file"
 		debug "New squash commit: $new"
 		rev="$new"
 	fi
@@ -722,11 +774,18 @@ cmd_push()
 	    die "You must provide <repository> <ref>"
 	fi
 	ensure_valid_ref_format "$2"
+
+	opts=
+	if [ -n "$squash" ]; then
+		opts="-squash"
+	fi
+	# Can't easily pass on --edit because of stdout capture redirection
+
 	if [ -e "$dir" ]; then
 	    repository=$1
 	    refspec=$2
 	    echo "git push using: " $repository $refspec
-	    localrev=$(git subtree split --prefix="$prefix") || die
+	    localrev=$(git subtree split --prefix="$prefix" $opts --message="$message") || die
 	    git push $repository $localrev:refs/heads/$refspec
 	else
 	    die "'$dir' must already exist. Try 'git subtree add'."

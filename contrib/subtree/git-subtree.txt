@@ -142,16 +142,9 @@ OPTIONS
 
 -m <message>::
 --message=<message>::
-	This option is only valid for add, merge and pull (unsure).
 	Specify <message> as the commit message for the merge commit.
 
-
-OPTIONS FOR add, merge, push, pull
-----------------------------------
 --squash::
-	This option is only valid for add, merge, push and pull
-	commands.
-
 	Instead of merging the entire history from the subtree
 	project, produce only a single commit that contains all
 	the differences you want to merge, and then merge that
@@ -179,6 +172,14 @@ OPTIONS FOR add, merge, push, pull
 	Whether or not you use '--squash', changes made in your
 	local repository remain intact and can be later split
 	and send upstream to the subproject.
+
+	Using '--squash' with split '--rejoin' only squashes
+	the merge back to the mainline, not the synthetic subtree
+	history.
+
+--edit::
+	When used with '--squash', bring up an editor on the squash
+	commit message, to allow customizing it.
 
 
 OPTIONS FOR split
@@ -251,9 +252,10 @@ OPTIONS FOR split
 	showing an extra copy of every new commit that was
 	created (the original, and the synthetic one).
 	
-	If you do all your merges with '--squash', don't use
-	'--rejoin' when you split, because you don't want the
-	subproject's history to be part of your project anyway.
+	Fortunately, you can use '--squash' with '--rejoin'
+	to simplify a sequence of synthetic commits as a
+	single squashed commit in the mainline.  The subtree
+	will still have full history.
 
 
 EXAMPLE 1. Add command
