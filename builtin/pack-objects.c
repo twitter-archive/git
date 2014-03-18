@@ -57,6 +57,7 @@ static int num_preferred_base;
 static struct progress *progress_state;
 static int pack_compression_level = Z_DEFAULT_COMPRESSION;
 static int pack_compression_seen;
+static int keep_pack;
 
 static struct packed_git *reuse_packfile;
 static uint32_t reuse_packfile_objects;
@@ -758,6 +759,23 @@ static off_t write_reused_pack(struct sha1file *f)
 	return reuse_packfile_offset - sizeof(struct pack_header);
 }
 
+static void write_keep_file(const unsigned char *sha1)
+{
+	const char *msg = "pack-objects --keep\n";
+	char name[PATH_MAX];
+	int keep_fd = odb_pack_keep(name, sizeof(name), sha1);
+	if (keep_fd < 0) {
+		if (errno != EEXIST)
+			die_errno(_("cannot write keep file '%s'"),
+				  name);
+		return;
+	}
+	write_or_die(keep_fd, msg, strlen(msg));
+	if (close(keep_fd) != 0)
+		die_errno(_("cannot close written keep file '%s'"),
+			  name);
+}
+
 static void write_pack_file(void)
 {
 	uint32_t i = 0, j;
@@ -817,6 +835,9 @@ static void write_pack_file(void)
 		if (!pack_to_stdout) {
 			struct stat st;
 			struct strbuf tmpname = STRBUF_INIT;
+
+			if (keep_pack)
+				write_keep_file(sha1);
 
 			/*
 			 * Packs are runtime accessed in their mtime
@@ -2631,6 +2652,8 @@ int cmd_pack_objects(int argc, const char **argv, const char *prefix)
 			 N_("use a bitmap index if available to speed up counting objects")),
 		OPT_BOOL(0, "write-bitmap-index", &write_bitmap_index,
 			 N_("write a bitmap index together with the pack index")),
+		OPT_BOOL(0, "keep", &keep_pack,
+			 N_("create .keep for the new pack")),
 		OPT_END(),
 	};
 
@@ -2693,6 +2716,9 @@ int cmd_pack_objects(int argc, const char **argv, const char *prefix)
 
 	if (!pack_to_stdout && thin)
 		die("--thin cannot be used to build an indexable pack.");
+
+	if (pack_to_stdout && keep_pack)
+		die("--keep cannot be used with --stdout");
 
 	if (keep_unreachable && unpack_unreachable)
 		die("--keep-unreachable and --unpack-unreachable are incompatible.");

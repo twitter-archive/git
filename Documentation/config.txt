@@ -1153,10 +1153,34 @@ filter.<driver>.smudge::
 	object to a worktree file upon checkout.  See
 	linkgit:gitattributes[5] for details.
 
+gc.aggressiveDepth::
+	The depth parameter used in the delta compression
+	algorithm used by 'git gc --aggressive'.  This defaults
+	to 250.
+
 gc.aggressiveWindow::
 	The window size parameter used in the delta compression
 	algorithm used by 'git gc --aggressive'.  This defaults
 	to 250.
+
+gc.aggressiveCommitLimits::
+	This one parameter to linkgit:git-rev-list[1] to select
+	commits that are repacked with gc.aggressiveDepth and
+	gc.aggressiveWindow, while the remaining commits are repacked
+	with gc.lessAggressiveDepth and gc.lessAggressiveWindow.
++
+If this is an empty string, everything will be repacked with
+gc.aggressiveWindow and gc.aggressiveDepth.
+
+gc.lessAggressiveDepth::
+	The depth parameter used in the delta compression
+	algorithm used by 'git gc --aggressive' when
+	gc.aggressiveCommitLimits is set.  This defaults to 50.
+
+gc.lessAggressiveWindow::
+	The window size parameter used in the delta compression
+	algorithm used by 'git gc --aggressive' when
+	gc.aggressiveCommitLimits is set.  This defaults to 250.
 
 gc.auto::
 	When there are approximately more than this many loose

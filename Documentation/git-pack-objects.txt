@@ -119,6 +119,10 @@ base-name::
 	has a .keep file to be ignored, even if it would have
 	otherwise been packed.
 
+--keep::
+	Before moving the index into its final destination
+	create an empty .keep file for the associated pack file.
+
 --incremental::
 	This flag causes an object already in a pack to be ignored
 	even if it would have otherwise been packed.

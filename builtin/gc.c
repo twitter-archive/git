@@ -26,12 +26,17 @@ static const char * const builtin_gc_usage[] = {
 };
 
 static int pack_refs = 1;
+static int aggressive_depth = 250;
 static int aggressive_window = 250;
+static const char *aggressive_rev_list = "--before=1.year.ago";
+static int less_aggressive_depth = 50;
+static int less_aggressive_window = 250;
 static int gc_auto_threshold = 6700;
 static int gc_auto_pack_limit = 50;
 static int detach_auto = 1;
 static const char *prune_expire = "2.weeks.ago";
 static const char *prune_repos_expire = "3.months.ago";
+static int delta_base_offset = 1;
 
 static struct argv_array pack_refs_cmd = ARGV_ARRAY_INIT;
 static struct argv_array reflog = ARGV_ARRAY_INIT;
@@ -40,10 +45,13 @@ static struct argv_array prune = ARGV_ARRAY_INIT;
 static struct argv_array prune_repos = ARGV_ARRAY_INIT;
 static struct argv_array rerere = ARGV_ARRAY_INIT;
 
+static char *keep_file;
 static char *pidfile;
 
 static void remove_pidfile(void)
 {
+	if (keep_file)
+		unlink_or_warn(keep_file);
 	if (pidfile)
 		unlink(pidfile);
 }
@@ -53,6 +61,63 @@ static void remove_pidfile_on_signal(int signo)
 	remove_pidfile();
 	sigchain_pop(signo);
 	raise(signo);
+}
+
+static void pack_old_history(int quiet)
+{
+	struct child_process pack_objects;
+	struct child_process rev_list;
+	struct argv_array av_po = ARGV_ARRAY_INIT;
+	struct argv_array av_rl = ARGV_ARRAY_INIT;
+	char sha1[41];
+
+	argv_array_pushl(&av_rl, "rev-list", "--all", "--objects",
+			 "--reflog", NULL);
+	argv_array_push(&av_rl, aggressive_rev_list);
+
+	memset(&rev_list, 0, sizeof(rev_list));
+	rev_list.no_stdin = 1;
+	rev_list.out = -1;
+	rev_list.git_cmd = 1;
+	rev_list.argv = av_rl.argv;
+
+	if (start_command(&rev_list))
+		die(_("gc: unable to fork git-rev-list"));
+
+	argv_array_pushl(&av_po, "pack-objects", "--keep-true-parents",
+			 "--honor-pack-keep", "--non-empty", "--no-reuse-delta",
+			 "--keep", "--local", NULL);
+	if (delta_base_offset)
+		argv_array_push(&av_po,  "--delta-base-offset");
+	if (quiet)
+		argv_array_push(&av_po, "-q");
+	if (aggressive_window)
+		argv_array_pushf(&av_po, "--window=%d", aggressive_window);
+	if (aggressive_depth)
+		argv_array_pushf(&av_po, "--depth=%d", aggressive_depth);
+	argv_array_push(&av_po, git_path("objects/pack/pack"));
+
+	memset(&pack_objects, 0, sizeof(pack_objects));
+	pack_objects.in = rev_list.out;
+	pack_objects.out = -1;
+	pack_objects.git_cmd = 1;
+	pack_objects.argv = av_po.argv;
+
+	if (start_command(&pack_objects))
+		die(_("gc: unable to fork git-pack-objects"));
+
+	if (read_in_full(pack_objects.out, sha1, 41) != 41 ||
+	    sha1[40] != '\n')
+		die_errno(_("gc: pack-objects did not return the new pack's SHA-1"));
+	sha1[40] = '\0';
+	keep_file = git_pathdup("objects/pack/pack-%s.keep", sha1);
+	close(pack_objects.out);
+
+	if (finish_command(&rev_list))
+		die(_("gc: git-rev-list died with error"));
+
+	if (finish_command(&pack_objects))
+		die(_("gc: git-pack-objects died with error"));
 }
 
 static int gc_config(const char *var, const char *value, void *cb)
@@ -66,6 +131,26 @@ static int gc_config(const char *var, const char *value, void *cb)
 	}
 	if (!strcmp(var, "gc.aggressivewindow")) {
 		aggressive_window = git_config_int(var, value);
+		return 0;
+	}
+	if (!strcmp(var, "gc.aggressivedepth")) {
+		aggressive_depth = git_config_int(var, value);
+		return 0;
+	}
+	if (!strcmp(var, "gc.aggressivecommitlimits")) {
+		aggressive_rev_list = value && *value ? xstrdup(value) : NULL;
+		return 0;
+	}
+	if (!strcmp(var, "gc.lessaggressivewindow")) {
+		less_aggressive_window = git_config_int(var, value);
+		return 0;
+	}
+	if (!strcmp(var, "gc.lessaggressivedepth")) {
+		less_aggressive_depth = git_config_int(var, value);
+		return 0;
+	}
+	if (!strcmp(var, "repack.usedeltabaseoffset")) {
+		delta_base_offset = git_config_bool(var, value);
 		return 0;
 	}
 	if (!strcmp(var, "gc.auto")) {
@@ -304,10 +389,19 @@ int cmd_gc(int argc, const char **argv, const char *prefix)
 		usage_with_options(builtin_gc_usage, builtin_gc_options);
 
 	if (aggressive) {
+		int depth, window;
+		if (aggressive_rev_list) {
+			depth = less_aggressive_depth;
+			window = less_aggressive_window;
+		} else {
+			depth = aggressive_depth;
+			window = aggressive_window;
+		}
 		argv_array_push(&repack, "-f");
-		argv_array_push(&repack, "--depth=250");
-		if (aggressive_window > 0)
-			argv_array_pushf(&repack, "--window=%d", aggressive_window);
+		if (depth > 0)
+			argv_array_pushf(&repack, "--depth=%d", depth);
+		if (window > 0)
+			argv_array_pushf(&repack, "--window=%d", window);
 	}
 	if (quiet)
 		argv_array_push(&repack, "-q");
@@ -348,8 +442,21 @@ int cmd_gc(int argc, const char **argv, const char *prefix)
 	if (run_command_v_opt(reflog.argv, RUN_GIT_CMD))
 		return error(FAILED_RUN, reflog.argv[0]);
 
+	if (aggressive && aggressive_rev_list)
+		pack_old_history(quiet);
+
 	if (run_command_v_opt(repack.argv, RUN_GIT_CMD))
 		return error(FAILED_RUN, repack.argv[0]);
+
+	if (aggressive && aggressive_rev_list) {
+		if (keep_file)
+			unlink_or_warn(keep_file);
+		argv_array_clear(&repack);
+		argv_array_pushl(&repack, "repack", "-d", "-l", NULL);
+		add_repack_all_option();
+		if (run_command_v_opt(repack.argv, RUN_GIT_CMD))
+			return error(FAILED_RUN, repack.argv[0]);
+	}
 
 	if (prune_expire) {
 		argv_array_push(&prune, prune_expire);
