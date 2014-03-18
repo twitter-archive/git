@@ -93,6 +93,29 @@ sed -e '
 	s/song;/song();/
 ' <Beer.perl >Beer-correct.perl
 
+cat >Beer.c <<\EOF
+static int foo(void)
+{
+label:
+	int x = old;
+}
+
+struct foo; /* catch failure below */
+static int
+gnu(int arg)
+{
+	int x = old;
+}
+
+struct foo; /* catch failure below */
+int multiline(int arg,
+	      char *arg2)
+{
+	int x = old;
+}
+EOF
+sed s/old/new/ <Beer.c >Beer-correct.c
+
 test_expect_funcname () {
 	lang=${2-java}
 	test_expect_code 1 git diff --no-index -U1 \
@@ -127,6 +150,7 @@ test_expect_success 'set up .gitattributes declaring drivers to test' '
 	cat >.gitattributes <<-\EOF
 	*.java diff=java
 	*.perl diff=perl
+	*.c diff=cpp
 	EOF
 '
 
@@ -156,6 +180,18 @@ test_expect_success 'perl pattern gets full line of POD header' '
 
 test_expect_success 'perl pattern is not distracted by forward declaration' '
 	test_expect_funcname "package Beer;\$" perl
+'
+
+test_expect_success 'c pattern skips labels' '
+	test_expect_funcname "static int foo(void)" c
+'
+
+test_expect_success 'c pattern matches GNU-style functions' '
+	test_expect_funcname "gnu(int arg)\$" c
+'
+
+test_expect_success 'c pattern matches multiline functions' '
+	test_expect_funcname "int multiline(int arg,\$" c
 '
 
 test_expect_success 'custom pattern' '
