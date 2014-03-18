@@ -1837,6 +1837,12 @@ static int handle_revision_opt(struct rev_info *revs, int argc, const char **arg
 		revs->notes_opt.use_default_notes = 1;
 	} else if (!strcmp(arg, "--show-signature")) {
 		revs->show_signature = 1;
+	} else if (!strcmp(arg, "--nonlinear-barrier")) {
+		revs->track_linear = 1;
+		revs->break_bar = "                    ..........";
+	} else if (starts_with(arg, "--nonlinear-barrier=")) {
+		revs->track_linear = 1;
+		revs->break_bar = xstrdup(arg + 20);
 	} else if (starts_with(arg, "--show-notes=") ||
 		   starts_with(arg, "--notes=")) {
 		struct strbuf buf = STRBUF_INIT;
@@ -2902,6 +2908,32 @@ enum commit_action simplify_commit(struct rev_info *revs, struct commit *commit)
 	return action;
 }
 
+define_commit_slab(saved_linear, int);
+
+static void track_linear(struct rev_info *revs, struct commit *commit)
+{
+	struct commit_list *p = revs->previous_parents;
+
+	if (p) {
+		int got_parent = 0;
+		for (; p && !got_parent; p = p->next)
+			got_parent = !hashcmp(p->item->object.sha1,
+					      commit->object.sha1);
+		revs->linear = got_parent;
+		free_commit_list(revs->previous_parents);
+	} else
+		revs->linear = 1;
+	if (revs->reverse) {
+		if (!revs->saved_linear_slab) {
+			revs->saved_linear_slab = xmalloc(sizeof(struct saved_linear));
+			init_saved_linear(revs->saved_linear_slab);
+		}
+
+		*saved_linear_at(revs->saved_linear_slab, commit) = revs->linear;
+	}
+	revs->previous_parents = copy_commit_list(commit->parents);
+}
+
 static struct commit *get_revision_1(struct rev_info *revs)
 {
 	if (!revs->commits)
@@ -2941,6 +2973,8 @@ static struct commit *get_revision_1(struct rev_info *revs)
 			die("Failed to simplify parents of commit %s",
 			    sha1_to_hex(commit->object.sha1));
 		default:
+			if (revs->track_linear)
+				track_linear(revs, commit);
 			return commit;
 		}
 	} while (revs->commits);
@@ -3107,14 +3141,25 @@ struct commit *get_revision(struct rev_info *revs)
 		revs->reverse_output_stage = 1;
 	}
 
-	if (revs->reverse_output_stage)
-		return pop_commit(&revs->commits);
+	if (revs->reverse_output_stage) {
+		c = pop_commit(&revs->commits);
+		if (revs->track_linear)
+			revs->linear = *saved_linear_at(revs->saved_linear_slab, c);
+		return c;
+	}
 
 	c = get_revision_internal(revs);
 	if (c && revs->graph)
 		graph_update(revs->graph, c);
-	if (!c)
+	if (!c) {
 		free_saved_parents(revs);
+		if (revs->saved_linear_slab)
+			clear_saved_linear(revs->saved_linear_slab);
+		if (revs->previous_parents) {
+			free_commit_list(revs->previous_parents);
+			revs->previous_parents = NULL;
+		}
+	}
 	return c;
 }
 

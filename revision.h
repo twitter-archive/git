@@ -134,6 +134,7 @@ struct rev_info {
 			use_terminator:1,
 			missing_newline:1,
 			date_mode_explicit:1,
+			track_linear:1,
 			preserve_subject:1;
 	unsigned int	disable_stdin:1;
 	unsigned int	leak_pending:1;
@@ -197,6 +198,11 @@ struct rev_info {
 
 	/* copies of the parent lists, for --full-diff display */
 	struct saved_parents *saved_parents_slab;
+
+	struct commit_list *previous_parents;
+	struct saved_linear *saved_linear_slab;
+	char *break_bar;
+	unsigned int linear;
 };
 
 extern int ref_excluded(struct string_list *, const char *path);
