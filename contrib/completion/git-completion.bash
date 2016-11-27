@@ -21,6 +21,16 @@
 #        source ~/.git-completion.sh
 #    3) Consider changing your PS1 to also show the current branch,
 #       see git-prompt.sh for details.
+#
+# Use the following environment variables modify completion behavior:
+#
+# GIT_COMPLETION_REFS_BASE_PATTERNS -- space delimited set of patterns to use with git
+#   `for-each-ref` to compute ref name completions. Defaults to "refs/heads refs/tags refs/remotes".
+#
+# GIT_COMPLETION_REFS_DISABLE_REMOTE_TRACKING -- if defined, when computing ref name completions do
+#   not attempt to find remote ref names unique across all remotes which match current
+#   prefix. Defaults to undefined.
+#
 
 case "$COMP_WORDBREAKS" in
 *:*) : great ;;
@@ -353,7 +363,7 @@ __git_refs ()
 		esac
 		git --git-dir="$dir" for-each-ref --format="%($format)" \
 			$refs
-		if [ -z "$GIT_COMPLETION_REFS_DISABLE_TRACKING" -a -n "$track" ]; then
+		if [ -z "$GIT_COMPLETION_REFS_DISABLE_REMOTE_TRACKING" -a -n "$track" ]; then
 			# employ the heuristic used by git checkout
 			# Try to find a remote branch that matches the completion word
 			# but only output if the branch name is unique
