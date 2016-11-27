@@ -348,12 +348,12 @@ __git_refs ()
 				if [ -e "$dir/$i" ]; then echo $i; fi
 			done
 			format="refname:short"
-			refs="refs/tags refs/heads refs/remotes"
+			refs="${GIT_COMPLETION_REFS_BASE_PATTERNS:-refs/heads refs/tags refs/remotes}"
 			;;
 		esac
 		git --git-dir="$dir" for-each-ref --format="%($format)" \
 			$refs
-		if [ -n "$track" ]; then
+		if [ -z "$GIT_COMPLETION_REFS_DISABLE_TRACKING" -a -n "$track" ]; then
 			# employ the heuristic used by git checkout
 			# Try to find a remote branch that matches the completion word
 			# but only output if the branch name is unique
