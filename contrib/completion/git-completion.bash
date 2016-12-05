@@ -363,13 +363,13 @@ __git_refs ()
 			done
 			format="refname:short"
 			refs="refs/heads"
-			[[ $(git config --boolean --get completion.bash.disableTags) = "true" ]] || refs="$refs /refs/tags"
-			[[ $(git config --boolean --get completion.bash.disableRemotes) = "true" ]] || refs="$refs /refs/remotes"
+			[[ $(git config --bool --get completion.bash.disableTags) = "true" ]] || refs="$refs /refs/tags"
+			[[ $(git config --bool --get completion.bash.disableRemotes) = "true" ]] || refs="$refs /refs/remotes"
 			;;
 		esac
 		git --git-dir="$dir" for-each-ref --format="%($format)" \
 			$refs
-		[[ $(git config --boolean --get completion.bash.disableRemoteTracking) = "true" ]] && track=""
+		[[ $(git config --bool --get completion.bash.disableRemoteTracking) = "true" ]] && track=""
 		if [ -n "$track" ]; then
 			# employ the heuristic used by git checkout
 			# Try to find a remote branch that matches the completion word
