@@ -40,8 +40,7 @@ static int credential_config_callback(const char *var, const char *value,
 	struct credential *c = data;
 	const char *key, *dot;
 
-	key = skip_prefix(var, "credential.");
-	if (!key)
+	if (!skip_prefix(var, "credential.", &key))
 		return 0;
 
 	if (!value)
@@ -64,9 +63,12 @@ static int credential_config_callback(const char *var, const char *value,
 		key = dot + 1;
 	}
 
-	if (!strcmp(key, "helper"))
-		string_list_append(&c->helpers, value);
-	else if (!strcmp(key, "username")) {
+	if (!strcmp(key, "helper")) {
+		if (*value)
+			string_list_append(&c->helpers, value);
+		else
+			string_list_clear(&c->helpers, 0);
+	} else if (!strcmp(key, "username")) {
 		if (!c->username)
 			c->username = xstrdup(value);
 	}
@@ -143,7 +145,7 @@ int credential_read(struct credential *c, FILE *fp)
 {
 	struct strbuf line = STRBUF_INIT;
 
-	while (strbuf_getline(&line, fp, '\n') != EOF) {
+	while (strbuf_getline_lf(&line, fp) != EOF) {
 		char *key = line.buf;
 		char *value = strchr(key, '=');
 
@@ -174,6 +176,8 @@ int credential_read(struct credential *c, FILE *fp)
 			c->path = xstrdup(value);
 		} else if (!strcmp(key, "url")) {
 			credential_from_url(c, value);
+		} else if (!strcmp(key, "quit")) {
+			c->quit = !!git_config_bool("quit", value);
 		}
 		/*
 		 * Ignore other lines; we don't know what they mean, but
@@ -206,11 +210,10 @@ static int run_credential_helper(struct credential *c,
 				 const char *cmd,
 				 int want_output)
 {
-	struct child_process helper;
+	struct child_process helper = CHILD_PROCESS_INIT;
 	const char *argv[] = { NULL, NULL };
 	FILE *fp;
 
-	memset(&helper, 0, sizeof(helper));
 	argv[0] = cmd;
 	helper.argv = argv;
 	helper.use_shell = 1;
@@ -276,6 +279,9 @@ void credential_fill(struct credential *c)
 		credential_do(c, c->helpers.items[i].string, "get");
 		if (c->username && c->password)
 			return;
+		if (c->quit)
+			die("credential helper '%s' told us to quit",
+			    c->helpers.items[i].string);
 	}
 
 	credential_getpass(c);

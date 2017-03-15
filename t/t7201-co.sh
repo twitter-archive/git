@@ -88,14 +88,10 @@ test_expect_success "checkout with unrelated dirty tree without -m" '
 
 	git checkout -f master &&
 	fill 0 1 2 3 4 5 6 7 8 >same &&
-	cp same kept
+	cp same kept &&
 	git checkout side >messages &&
-	test_cmp same kept
-	(cat > messages.expect <<EOF
-M	same
-EOF
-) &&
-	touch messages.expect &&
+	test_cmp same kept &&
+	printf "M\t%s\n" same >messages.expect &&
 	test_cmp messages.expect messages
 '
 
@@ -109,10 +105,7 @@ test_expect_success "checkout -m with dirty tree" '
 
 	test "$(git symbolic-ref HEAD)" = "refs/heads/side" &&
 
-	(cat >expect.messages <<EOF
-M	one
-EOF
-) &&
+	printf "M\t%s\n" one >expect.messages &&
 	test_cmp expect.messages messages &&
 
 	fill "M	one" "A	three" "D	two" >expect.master &&
@@ -223,6 +216,23 @@ test_expect_success 'checkout --merge --conflict=diff3 <branch>' '
 	test_cmp two expect
 '
 
+test_expect_success 'switch to another branch while carrying a deletion' '
+
+	git checkout -f master && git reset --hard && git clean -f &&
+	git rm two &&
+
+	test_must_fail git checkout simple 2>errs &&
+	test_i18ngrep overwritten errs &&
+
+	git checkout --merge simple 2>errs &&
+	test_i18ngrep ! overwritten errs &&
+	git ls-files -u &&
+	test_must_fail git cat-file -t :0:two &&
+	test "$(git cat-file -t :1:two)" = blob &&
+	test "$(git cat-file -t :2:two)" = blob &&
+	test_must_fail git cat-file -t :3:two
+'
+
 test_expect_success 'checkout to detach HEAD (with advice declined)' '
 
 	git config advice.detachedHead false &&
@@ -247,7 +257,7 @@ test_expect_success 'checkout to detach HEAD' '
 	git checkout -f renamer && git clean -f &&
 	git checkout renamer^ 2>messages &&
 	test_i18ngrep "HEAD is now at 7329388" messages &&
-	test_line_count -gt 1 messages &&
+	(test_line_count -gt 1 messages || test -n "$GETTEXT_POISON") &&
 	H=$(git rev-parse --verify HEAD) &&
 	M=$(git show-ref -s --verify refs/heads/master) &&
 	test "z$H" = "z$M" &&
@@ -392,12 +402,12 @@ test_expect_success \
 
 test_expect_success \
     'checkout w/autosetupmerge=always sets up tracking' '
+    test_when_finished git config branch.autosetupmerge false &&
     git config branch.autosetupmerge always &&
     git checkout master &&
     git checkout -b track2 &&
     test "$(git config branch.track2.remote)" &&
-    test "$(git config branch.track2.merge)"
-    git config branch.autosetupmerge false'
+    test "$(git config branch.track2.merge)"'
 
 test_expect_success 'checkout w/--track from non-branch HEAD fails' '
     git checkout master^0 &&
@@ -574,7 +584,7 @@ test_expect_success 'checkout --conflict=merge, overriding config' '
 '
 
 test_expect_success 'checkout --conflict=diff3' '
-	git config --unset merge.conflictstyle
+	test_unconfig merge.conflictstyle &&
 	setup_conflicting_index &&
 	echo "none of the above" >sample &&
 	echo ourside >expect &&

@@ -10,7 +10,6 @@
 #include "cache.h"
 #include "dir.h"
 #include "parse-options.h"
-#include "refs.h"
 #include "string-list.h"
 #include "quote.h"
 #include "column.h"
@@ -48,7 +47,7 @@ enum color_clean {
 	CLEAN_COLOR_PROMPT = 2,
 	CLEAN_COLOR_HEADER = 3,
 	CLEAN_COLOR_HELP = 4,
-	CLEAN_COLOR_ERROR = 5,
+	CLEAN_COLOR_ERROR = 5
 };
 
 #define MENU_OPTS_SINGLETON		01
@@ -67,7 +66,7 @@ struct menu_item {
 	char hotkey;
 	const char *title;
 	int selected;
-	int (*fn)();
+	int (*fn)(void);
 };
 
 enum menu_stuff_type {
@@ -100,6 +99,8 @@ static int parse_clean_color_slot(const char *var)
 
 static int git_clean_config(const char *var, const char *value, void *cb)
 {
+	const char *slot_name;
+
 	if (starts_with(var, "column."))
 		return git_column_config(var, value, "clean", &colopts);
 
@@ -109,15 +110,13 @@ static int git_clean_config(const char *var, const char *value, void *cb)
 		clean_use_color = git_config_colorbool(var, value);
 		return 0;
 	}
-	if (starts_with(var, "color.interactive.")) {
-		int slot = parse_clean_color_slot(var +
-						  strlen("color.interactive."));
+	if (skip_prefix(var, "color.interactive.", &slot_name)) {
+		int slot = parse_clean_color_slot(slot_name);
 		if (slot < 0)
 			return 0;
 		if (!value)
 			return config_error_nonbool(var);
-		color_parse(value, var, clean_colors[slot]);
-		return 0;
+		return color_parse(value, clean_colors[slot]);
 	}
 
 	if (!strcmp(var, "clean.requireforce")) {
@@ -155,13 +154,11 @@ static int remove_dirs(struct strbuf *path, const char *prefix, int force_flag,
 	struct strbuf quoted = STRBUF_INIT;
 	struct dirent *e;
 	int res = 0, ret = 0, gone = 1, original_len = path->len, len;
-	unsigned char submodule_head[20];
 	struct string_list dels = STRING_LIST_INIT_DUP;
 
 	*dir_gone = 1;
 
-	if ((force_flag & REMOVE_DIR_KEEP_NESTED_GIT) &&
-			!resolve_gitlink_ref(path->buf, "HEAD", submodule_head)) {
+	if ((force_flag & REMOVE_DIR_KEEP_NESTED_GIT) && is_nonbare_repository_dir(path)) {
 		if (!quiet) {
 			quote_path_relative(path->buf, prefix, &quoted);
 			printf(dry_run ?  _(msg_would_skip_git_dir) : _(msg_skip_git_dir),
@@ -177,15 +174,16 @@ static int remove_dirs(struct strbuf *path, const char *prefix, int force_flag,
 		/* an empty dir could be removed even if it is unreadble */
 		res = dry_run ? 0 : rmdir(path->buf);
 		if (res) {
+			int saved_errno = errno;
 			quote_path_relative(path->buf, prefix, &quoted);
-			warning(_(msg_warn_remove_failed), quoted.buf);
+			errno = saved_errno;
+			warning_errno(_(msg_warn_remove_failed), quoted.buf);
 			*dir_gone = 0;
 		}
 		return res;
 	}
 
-	if (path->buf[original_len - 1] != '/')
-		strbuf_addch(path, '/');
+	strbuf_complete(path, '/');
 
 	len = path->len;
 	while ((e = readdir(dir)) != NULL) {
@@ -212,8 +210,10 @@ static int remove_dirs(struct strbuf *path, const char *prefix, int force_flag,
 				quote_path_relative(path->buf, prefix, &quoted);
 				string_list_append(&dels, quoted.buf);
 			} else {
+				int saved_errno = errno;
 				quote_path_relative(path->buf, prefix, &quoted);
-				warning(_(msg_warn_remove_failed), quoted.buf);
+				errno = saved_errno;
+				warning_errno(_(msg_warn_remove_failed), quoted.buf);
 				*dir_gone = 0;
 				ret = 1;
 			}
@@ -234,8 +234,10 @@ static int remove_dirs(struct strbuf *path, const char *prefix, int force_flag,
 		if (!res)
 			*dir_gone = 1;
 		else {
+			int saved_errno = errno;
 			quote_path_relative(path->buf, prefix, &quoted);
-			warning(_(msg_warn_remove_failed), quoted.buf);
+			errno = saved_errno;
+			warning_errno(_(msg_warn_remove_failed), quoted.buf);
 			*dir_gone = 0;
 			ret = 1;
 		}
@@ -291,11 +293,11 @@ static void pretty_print_menus(struct string_list *menu_list)
 static void prompt_help_cmd(int singleton)
 {
 	clean_print_color(CLEAN_COLOR_HELP);
-	printf_ln(singleton ?
+	printf(singleton ?
 		  _("Prompt help:\n"
 		    "1          - select a numbered item\n"
 		    "foo        - select item based on unique prefix\n"
-		    "           - (empty) select nothing") :
+		    "           - (empty) select nothing\n") :
 		  _("Prompt help:\n"
 		    "1          - select a single item\n"
 		    "3-5        - select a range of items\n"
@@ -303,7 +305,7 @@ static void prompt_help_cmd(int singleton)
 		    "foo        - select item based on unique prefix\n"
 		    "-...       - unselect specified items\n"
 		    "*          - choose all items\n"
-		    "           - (empty) finish selecting"));
+		    "           - (empty) finish selecting\n"));
 	clean_print_color(CLEAN_COLOR_RESET);
 }
 
@@ -314,14 +316,13 @@ static void print_highlight_menu_stuff(struct menu_stuff *stuff, int **chosen)
 {
 	struct string_list menu_list = STRING_LIST_INIT_DUP;
 	struct strbuf menu = STRBUF_INIT;
-	struct strbuf buf = STRBUF_INIT;
 	struct menu_item *menu_item;
 	struct string_list_item *string_list_item;
 	int i;
 
 	switch (stuff->type) {
 	default:
-		die("Bad type of menu_staff when print menu");
+		die("Bad type of menu_stuff when print menu");
 	case MENU_STUFF_TYPE_MENU_ITEM:
 		menu_item = (struct menu_item *)stuff->stuff;
 		for (i = 0; i < stuff->nr; i++, menu_item++) {
@@ -363,7 +364,6 @@ static void print_highlight_menu_stuff(struct menu_stuff *stuff, int **chosen)
 	pretty_print_menus(&menu_list);
 
 	strbuf_release(&menu);
-	strbuf_release(&buf);
 	string_list_clear(&menu_list, 0);
 }
 
@@ -514,7 +514,7 @@ static int parse_choice(struct menu_stuff *menu_stuff,
 		if (top <= 0 || bottom <= 0 || top > menu_stuff->nr || bottom > top ||
 		    (is_single && bottom != top)) {
 			clean_print_color(CLEAN_COLOR_ERROR);
-			printf_ln(_("Huh (%s)?"), (*ptr)->buf);
+			printf(_("Huh (%s)?\n"), (*ptr)->buf);
 			clean_print_color(CLEAN_COLOR_RESET);
 			continue;
 		}
@@ -549,7 +549,7 @@ static int *list_and_choose(struct menu_opts *opts, struct menu_stuff *stuff)
 	int eof = 0;
 	int i;
 
-	chosen = xmalloc(sizeof(int) * stuff->nr);
+	ALLOC_ARRAY(chosen, stuff->nr);
 	/* set chosen as uninitialized */
 	for (i = 0; i < stuff->nr; i++)
 		chosen[i] = -1;
@@ -576,7 +576,7 @@ static int *list_and_choose(struct menu_opts *opts, struct menu_stuff *stuff)
 			       clean_get_color(CLEAN_COLOR_RESET));
 		}
 
-		if (strbuf_getline(&choice, stdin, '\n') != EOF) {
+		if (strbuf_getline_lf(&choice, stdin) != EOF) {
 			strbuf_trim(&choice);
 		} else {
 			eof = 1;
@@ -621,8 +621,7 @@ static int *list_and_choose(struct menu_opts *opts, struct menu_stuff *stuff)
 				nr += chosen[i];
 		}
 
-		result = xmalloc(sizeof(int) * (nr + 1));
-		memset(result, 0, sizeof(int) * (nr + 1));
+		result = xcalloc(st_add(nr, 1), sizeof(int));
 		for (i = 0; i < stuff->nr && j < nr; i++) {
 			if (chosen[i])
 				result[j++] = i;
@@ -659,7 +658,7 @@ static int filter_by_patterns_cmd(void)
 		clean_print_color(CLEAN_COLOR_PROMPT);
 		printf(_("Input ignore patterns>> "));
 		clean_print_color(CLEAN_COLOR_RESET);
-		if (strbuf_getline(&confirm, stdin, '\n') != EOF)
+		if (strbuf_getline_lf(&confirm, stdin) != EOF)
 			strbuf_trim(&confirm);
 		else
 			putchar('\n');
@@ -755,8 +754,9 @@ static int ask_each_cmd(void)
 		/* Ctrl-D should stop removing files */
 		if (!eof) {
 			qname = quote_path_relative(item->string, NULL, &buf);
-			printf(_("remove %s? "), qname);
-			if (strbuf_getline(&confirm, stdin, '\n') != EOF) {
+			/* TRANSLATORS: Make sure to keep [y/N] as is */
+			printf(_("Remove %s [y/N]? "), qname);
+			if (strbuf_getline_lf(&confirm, stdin) != EOF) {
 				strbuf_trim(&confirm);
 			} else {
 				putchar('\n');
@@ -780,7 +780,7 @@ static int ask_each_cmd(void)
 static int quit_cmd(void)
 {
 	string_list_clear(&del_list, 0);
-	printf_ln(_("Bye."));
+	printf(_("Bye.\n"));
 	return MENU_RETURN_NO_LOOP;
 }
 
@@ -904,11 +904,11 @@ int cmd_clean(int argc, const char **argv, const char *prefix)
 
 	if (!interactive && !dry_run && !force) {
 		if (config_set)
-			die(_("clean.requireForce set to true and neither -i, -n nor -f given; "
+			die(_("clean.requireForce set to true and neither -i, -n, nor -f given; "
 				  "refusing to clean"));
 		else
-			die(_("clean.requireForce defaults to true and neither -i, -n nor -f given; "
-				  "refusing to clean"));
+			die(_("clean.requireForce defaults to true and neither -i, -n, nor -f given;"
+				  " refusing to clean"));
 	}
 
 	if (force > 1)
@@ -941,14 +941,14 @@ int cmd_clean(int argc, const char **argv, const char *prefix)
 		if (!cache_name_is_other(ent->name, ent->len))
 			continue;
 
-		if (lstat(ent->name, &st))
-			die_errno("Cannot lstat '%s'", ent->name);
-
 		if (pathspec.nr)
 			matches = dir_path_match(ent, &pathspec, 0, NULL);
 
 		if (pathspec.nr && !matches)
 			continue;
+
+		if (lstat(ent->name, &st))
+			die_errno("Cannot lstat '%s'", ent->name);
 
 		if (S_ISDIR(st.st_mode) && !remove_directories &&
 		    matches != MATCHED_EXACTLY)
@@ -987,8 +987,10 @@ int cmd_clean(int argc, const char **argv, const char *prefix)
 		} else {
 			res = dry_run ? 0 : unlink(abs_path.buf);
 			if (res) {
+				int saved_errno = errno;
 				qname = quote_path_relative(item->string, NULL, &buf);
-				warning(_(msg_warn_remove_failed), qname);
+				errno = saved_errno;
+				warning_errno(_(msg_warn_remove_failed), qname);
 				errors++;
 			} else if (!quiet) {
 				qname = quote_path_relative(item->string, NULL, &buf);

@@ -7,6 +7,7 @@
 #include "commit.h"
 #include "diff.h"
 
+/* Remember to update object flag allocation in object.h */
 #define SEEN		(1u<<0)
 #define UNINTERESTING   (1u<<1)
 #define TREESAME	(1u<<2)
@@ -18,7 +19,8 @@
 #define SYMMETRIC_LEFT	(1u<<8)
 #define PATCHSAME	(1u<<9)
 #define BOTTOM		(1u<<10)
-#define ALL_REV_FLAGS	((1u<<11)-1)
+#define TRACK_LINEAR	(1u<<26)
+#define ALL_REV_FLAGS	(((1u<<11)-1) | TRACK_LINEAR)
 
 #define DECORATE_SHORT_REFS	1
 #define DECORATE_FULL_REFS	2
@@ -73,7 +75,8 @@ struct rev_info {
 	enum rev_sort_order sort_order;
 
 	unsigned int	early_output:1,
-			ignore_missing:1;
+			ignore_missing:1,
+			ignore_missing_links:1;
 
 	/* Traversal flags */
 	unsigned int	dense:1,
@@ -90,6 +93,7 @@ struct rev_info {
 			blob_objects:1,
 			verify_objects:1,
 			edge_hint:1,
+			edge_hint_aggressive:1,
 			limited:1,
 			unpacked:1,
 			boundary:2,
@@ -131,14 +135,21 @@ struct rev_info {
 			pretty_given:1,
 			abbrev_commit:1,
 			abbrev_commit_given:1,
+			zero_commit:1,
 			use_terminator:1,
 			missing_newline:1,
 			date_mode_explicit:1,
 			preserve_subject:1;
 	unsigned int	disable_stdin:1;
 	unsigned int	leak_pending:1;
+	/* --show-linear-break */
+	unsigned int	track_linear:1,
+			track_first_time:1,
+			linear:1;
 
-	enum date_mode date_mode;
+	struct date_mode date_mode;
+	int		expand_tabs_in_log; /* unset if negative */
+	int		expand_tabs_in_log_default;
 
 	unsigned int	abbrev;
 	enum cmit_fmt	commit_format;
@@ -161,6 +172,8 @@ struct rev_info {
 
 	/* Filter by commit log message */
 	struct grep_opt	grep_filter;
+	/* Negate the match of grep_filter */
+	int invert_grep;
 
 	/* Display history graph */
 	struct git_graph *graph;
@@ -197,6 +210,9 @@ struct rev_info {
 
 	/* copies of the parent lists, for --full-diff display */
 	struct saved_parents *saved_parents_slab;
+
+	struct commit_list *previous_parents;
+	const char *break_bar;
 };
 
 extern int ref_excluded(struct string_list *, const char *path);
@@ -243,21 +259,9 @@ extern void put_revision_mark(const struct rev_info *revs,
 extern void mark_parents_uninteresting(struct commit *commit);
 extern void mark_tree_uninteresting(struct tree *tree);
 
-struct name_path {
-	struct name_path *up;
-	int elem_len;
-	const char *elem;
-};
+char *path_name(struct strbuf *path, const char *name);
 
-char *path_name(const struct name_path *path, const char *name);
-
-extern void show_object_with_name(FILE *, struct object *,
-				  const struct name_path *, const char *);
-
-extern void add_object(struct object *obj,
-		       struct object_array *p,
-		       struct name_path *path,
-		       const char *name);
+extern void show_object_with_name(FILE *, struct object *, const char *);
 
 extern void add_pending_object(struct rev_info *revs,
 			       struct object *obj, const char *name);
@@ -266,6 +270,8 @@ extern void add_pending_sha1(struct rev_info *revs,
 			     unsigned int flags);
 
 extern void add_head_to_pending(struct rev_info *);
+extern void add_reflogs_to_pending(struct rev_info *, unsigned int flags);
+extern void add_index_objects_to_pending(struct rev_info *, unsigned int flags);
 
 enum commit_action {
 	commit_ignore,
@@ -290,18 +296,14 @@ extern int rewrite_parents(struct rev_info *revs, struct commit *commit,
 	rewrite_parent_fn_t rewrite_parent);
 
 /*
- * Save a copy of the parent list, and return the saved copy.  This is
- * used by the log machinery to retrieve the original parents when
- * commit->parents has been modified by history simpification.
- *
- * You may only call save_parents() once per commit (this is checked
- * for non-root commits).
+ * The log machinery saves the original parent list so that
+ * get_saved_parents() can later tell what the real parents of the
+ * commits are, when commit->parents has been modified by history
+ * simpification.
  *
  * get_saved_parents() will transparently return commit->parents if
  * history simplification is off.
  */
-extern void save_parents(struct rev_info *revs, struct commit *commit);
 extern struct commit_list *get_saved_parents(struct rev_info *revs, const struct commit *commit);
-extern void free_saved_parents(struct rev_info *revs);
 
 #endif

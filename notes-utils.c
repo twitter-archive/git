@@ -4,7 +4,8 @@
 #include "notes-utils.h"
 
 void create_notes_commit(struct notes_tree *t, struct commit_list *parents,
-			 const struct strbuf *msg, unsigned char *result_sha1)
+			 const char *msg, size_t msg_len,
+			 unsigned char *result_sha1)
 {
 	unsigned char tree_sha1[20];
 
@@ -25,7 +26,7 @@ void create_notes_commit(struct notes_tree *t, struct commit_list *parents,
 		/* else: t->ref points to nothing, assume root/orphan commit */
 	}
 
-	if (commit_tree(msg, tree_sha1, parents, result_sha1, NULL, NULL))
+	if (commit_tree(msg, msg_len, tree_sha1, parents, result_sha1, NULL, NULL))
 		die("Failed to commit notes tree to database");
 }
 
@@ -36,21 +37,39 @@ void commit_notes(struct notes_tree *t, const char *msg)
 
 	if (!t)
 		t = &default_notes_tree;
-	if (!t->initialized || !t->ref || !*t->ref)
+	if (!t->initialized || !t->update_ref || !*t->update_ref)
 		die(_("Cannot commit uninitialized/unreferenced notes tree"));
 	if (!t->dirty)
 		return; /* don't have to commit an unchanged tree */
 
 	/* Prepare commit message and reflog message */
 	strbuf_addstr(&buf, msg);
-	if (buf.buf[buf.len - 1] != '\n')
-		strbuf_addch(&buf, '\n'); /* Make sure msg ends with newline */
+	strbuf_complete_line(&buf);
 
-	create_notes_commit(t, NULL, &buf, commit_sha1);
+	create_notes_commit(t, NULL, buf.buf, buf.len, commit_sha1);
 	strbuf_insert(&buf, 0, "notes: ", 7); /* commit message starts at index 7 */
-	update_ref(buf.buf, t->ref, commit_sha1, NULL, 0, DIE_ON_ERR);
+	update_ref(buf.buf, t->update_ref, commit_sha1, NULL, 0,
+		   UPDATE_REFS_DIE_ON_ERR);
 
 	strbuf_release(&buf);
+}
+
+int parse_notes_merge_strategy(const char *v, enum notes_merge_strategy *s)
+{
+	if (!strcmp(v, "manual"))
+		*s = NOTES_MERGE_RESOLVE_MANUAL;
+	else if (!strcmp(v, "ours"))
+		*s = NOTES_MERGE_RESOLVE_OURS;
+	else if (!strcmp(v, "theirs"))
+		*s = NOTES_MERGE_RESOLVE_THEIRS;
+	else if (!strcmp(v, "union"))
+		*s = NOTES_MERGE_RESOLVE_UNION;
+	else if (!strcmp(v, "cat_sort_uniq"))
+		*s = NOTES_MERGE_RESOLVE_CAT_SORT_UNIQ;
+	else
+		return -1;
+
+	return 0;
 }
 
 static combine_notes_fn parse_combine_notes_fn(const char *v)
@@ -129,7 +148,7 @@ struct notes_rewrite_cfg *init_copy_notes_for_rewrite(const char *cmd)
 		free(c);
 		return NULL;
 	}
-	c->trees = load_notes_trees(c->refs);
+	c->trees = load_notes_trees(c->refs, NOTES_INIT_WRITABLE);
 	string_list_clear(c->refs, 0);
 	free(c->refs);
 	return c;

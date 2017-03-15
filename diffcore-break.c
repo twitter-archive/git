@@ -57,8 +57,8 @@ static int should_break(struct diff_filespec *src,
 		return 1; /* even their types are different */
 	}
 
-	if (src->sha1_valid && dst->sha1_valid &&
-	    !hashcmp(src->sha1, dst->sha1))
+	if (src->oid_valid && dst->oid_valid &&
+	    !oidcmp(&src->oid, &dst->oid))
 		return 0; /* they are the same */
 
 	if (diff_populate_filespec(src, 0) || diff_populate_filespec(dst, 0))
@@ -73,7 +73,6 @@ static int should_break(struct diff_filespec *src,
 
 	if (diffcore_count_changes(src, dst,
 				   &src->cnt_data, &dst->cnt_data,
-				   0,
 				   &src_copied, &literal_added))
 		return 0;
 
@@ -246,6 +245,13 @@ static void merge_broken(struct diff_filepair *p,
 
 	dp = diff_queue(outq, d->one, c->two);
 	dp->score = p->score;
+	/*
+	 * We will be one extra user of the same src side of the
+	 * broken pair, if it was used as the rename source for other
+	 * paths elsewhere.  Increment to mark that the path stays
+	 * in the resulting tree.
+	 */
+	d->one->rename_used++;
 	diff_free_filespec_data(d->two);
 	diff_free_filespec_data(c->one);
 	free(d);

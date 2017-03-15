@@ -99,9 +99,8 @@ test_expect_success 'whitespace=warn, default rule' '
 
 test_expect_success 'whitespace=error-all, default rule' '
 
-	apply_patch --whitespace=error-all && return 1
-	test -s target && return 1
-	: happy
+	test_must_fail apply_patch --whitespace=error-all &&
+	! test -s target
 
 '
 
@@ -510,6 +509,17 @@ test_expect_success 'whitespace=fix to expand' '
 	 QQg
 	EOF
 	git -c core.whitespace=tab-in-indent apply --whitespace=fix patch
+'
+
+test_expect_success 'whitespace check skipped for excluded paths' '
+	git config core.whitespace blank-at-eol &&
+	>used &&
+	>unused &&
+	git add used unused &&
+	echo "used" >used &&
+	echo "unused " >unused &&
+	git diff-files -p used unused >patch &&
+	git apply --include=used --stat --whitespace=error <patch
 '
 
 test_done

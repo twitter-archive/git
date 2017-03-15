@@ -7,7 +7,7 @@ test_description='Test git check-ref-format'
 valid_ref() {
 	prereq=
 	case $1 in
-	[A-Z]*)
+	[A-Z!]*)
 		prereq=$1
 		shift
 	esac
@@ -19,7 +19,7 @@ valid_ref() {
 invalid_ref() {
 	prereq=
 	case $1 in
-	[A-Z]*)
+	[A-Z!]*)
 		prereq=$1
 		shift
 	esac
@@ -30,17 +30,17 @@ invalid_ref() {
 }
 
 invalid_ref ''
-invalid_ref NOT_MINGW '/'
-invalid_ref NOT_MINGW '/' --allow-onelevel
-invalid_ref NOT_MINGW '/' --normalize
-invalid_ref NOT_MINGW '/' '--allow-onelevel --normalize'
+invalid_ref !MINGW '/'
+invalid_ref !MINGW '/' --allow-onelevel
+invalid_ref !MINGW '/' --normalize
+invalid_ref !MINGW '/' '--allow-onelevel --normalize'
 valid_ref 'foo/bar/baz'
 valid_ref 'foo/bar/baz' --normalize
 invalid_ref 'refs///heads/foo'
 valid_ref 'refs///heads/foo' --normalize
 invalid_ref 'heads/foo/'
-invalid_ref NOT_MINGW '/heads/foo'
-valid_ref NOT_MINGW '/heads/foo' --normalize
+invalid_ref !MINGW '/heads/foo'
+valid_ref !MINGW '/heads/foo' --normalize
 invalid_ref '///heads/foo'
 valid_ref '///heads/foo' --normalize
 invalid_ref './foo'
@@ -48,6 +48,7 @@ invalid_ref './foo/bar'
 invalid_ref 'foo/./bar'
 invalid_ref 'foo/bar/.'
 invalid_ref '.refs/foo'
+invalid_ref 'refs/heads/foo.'
 invalid_ref 'heads/foo..bar'
 invalid_ref 'heads/foo?bar'
 valid_ref 'foo./bar'
@@ -61,9 +62,11 @@ invalid_ref 'heads/foo\bar'
 invalid_ref "$(printf 'heads/foo\t')"
 invalid_ref "$(printf 'heads/foo\177')"
 valid_ref "$(printf 'heads/fu\303\237')"
-invalid_ref 'heads/*foo/bar' --refspec-pattern
-invalid_ref 'heads/foo*/bar' --refspec-pattern
-invalid_ref 'heads/f*o/bar' --refspec-pattern
+valid_ref 'heads/*foo/bar' --refspec-pattern
+valid_ref 'heads/foo*/bar' --refspec-pattern
+valid_ref 'heads/f*o/bar' --refspec-pattern
+invalid_ref 'heads/f*o*/bar' --refspec-pattern
+invalid_ref 'heads/foo*/bar*' --refspec-pattern
 
 ref='foo'
 invalid_ref "$ref"
@@ -119,14 +122,14 @@ invalid_ref "$ref" --refspec-pattern
 invalid_ref "$ref" '--refspec-pattern --allow-onelevel'
 
 ref='/foo'
-invalid_ref NOT_MINGW "$ref"
-invalid_ref NOT_MINGW "$ref" --allow-onelevel
-invalid_ref NOT_MINGW "$ref" --refspec-pattern
-invalid_ref NOT_MINGW "$ref" '--refspec-pattern --allow-onelevel'
-invalid_ref NOT_MINGW "$ref" --normalize
-valid_ref NOT_MINGW "$ref" '--allow-onelevel --normalize'
-invalid_ref NOT_MINGW "$ref" '--refspec-pattern --normalize'
-valid_ref NOT_MINGW "$ref" '--refspec-pattern --allow-onelevel --normalize'
+invalid_ref !MINGW "$ref"
+invalid_ref !MINGW "$ref" --allow-onelevel
+invalid_ref !MINGW "$ref" --refspec-pattern
+invalid_ref !MINGW "$ref" '--refspec-pattern --allow-onelevel'
+invalid_ref !MINGW "$ref" --normalize
+valid_ref !MINGW "$ref" '--allow-onelevel --normalize'
+invalid_ref !MINGW "$ref" '--refspec-pattern --normalize'
+valid_ref !MINGW "$ref" '--refspec-pattern --allow-onelevel --normalize'
 
 test_expect_success "check-ref-format --branch @{-1}" '
 	T=$(git write-tree) &&
@@ -161,7 +164,7 @@ test_expect_success 'check-ref-format --branch from subdir' '
 valid_ref_normalized() {
 	prereq=
 	case $1 in
-	[A-Z]*)
+	[A-Z!]*)
 		prereq=$1
 		shift
 	esac
@@ -173,7 +176,7 @@ valid_ref_normalized() {
 invalid_ref_normalized() {
 	prereq=
 	case $1 in
-	[A-Z]*)
+	[A-Z!]*)
 		prereq=$1
 		shift
 	esac
@@ -184,10 +187,10 @@ invalid_ref_normalized() {
 
 valid_ref_normalized 'heads/foo' 'heads/foo'
 valid_ref_normalized 'refs///heads/foo' 'refs/heads/foo'
-valid_ref_normalized NOT_MINGW '/heads/foo' 'heads/foo'
+valid_ref_normalized !MINGW '/heads/foo' 'heads/foo'
 valid_ref_normalized '///heads/foo' 'heads/foo'
 invalid_ref_normalized 'foo'
-invalid_ref_normalized NOT_MINGW '/foo'
+invalid_ref_normalized !MINGW '/foo'
 invalid_ref_normalized 'heads/foo/../bar'
 invalid_ref_normalized 'heads/./foo'
 invalid_ref_normalized 'heads\foo'

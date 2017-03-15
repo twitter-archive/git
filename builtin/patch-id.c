@@ -1,17 +1,14 @@
 #include "builtin.h"
 
-static void flush_current_id(int patchlen, unsigned char *id, git_SHA_CTX *c)
+static void flush_current_id(int patchlen, struct object_id *id, struct object_id *result)
 {
-	unsigned char result[20];
 	char name[50];
 
 	if (!patchlen)
 		return;
 
-	git_SHA1_Final(result, c);
-	memcpy(name, sha1_to_hex(id), 41);
-	printf("%s %s\n", sha1_to_hex(result), name);
-	git_SHA1_Init(c);
+	memcpy(name, oid_to_hex(id), GIT_SHA1_HEXSZ + 1);
+	printf("%s %s\n", oid_to_hex(result), name);
 }
 
 static int remove_space(char *line)
@@ -56,39 +53,57 @@ static int scan_hunk_header(const char *p, int *p_before, int *p_after)
 	return 1;
 }
 
-static int get_one_patchid(unsigned char *next_sha1, git_SHA_CTX *ctx, struct strbuf *line_buf)
+static void flush_one_hunk(struct object_id *result, git_SHA_CTX *ctx)
+{
+	unsigned char hash[GIT_SHA1_RAWSZ];
+	unsigned short carry = 0;
+	int i;
+
+	git_SHA1_Final(hash, ctx);
+	git_SHA1_Init(ctx);
+	/* 20-byte sum, with carry */
+	for (i = 0; i < GIT_SHA1_RAWSZ; ++i) {
+		carry += result->hash[i] + hash[i];
+		result->hash[i] = carry;
+		carry >>= 8;
+	}
+}
+
+static int get_one_patchid(struct object_id *next_oid, struct object_id *result,
+			   struct strbuf *line_buf, int stable)
 {
 	int patchlen = 0, found_next = 0;
 	int before = -1, after = -1;
+	git_SHA_CTX ctx;
+
+	git_SHA1_Init(&ctx);
+	oidclr(result);
 
 	while (strbuf_getwholeline(line_buf, stdin, '\n') != EOF) {
 		char *line = line_buf->buf;
-		char *p = line;
+		const char *p = line;
 		int len;
 
-		if (!memcmp(line, "diff-tree ", 10))
-			p += 10;
-		else if (!memcmp(line, "commit ", 7))
-			p += 7;
-		else if (!memcmp(line, "From ", 5))
-			p += 5;
-		else if (!memcmp(line, "\\ ", 2) && 12 < strlen(line))
+		if (!skip_prefix(line, "diff-tree ", &p) &&
+		    !skip_prefix(line, "commit ", &p) &&
+		    !skip_prefix(line, "From ", &p) &&
+		    starts_with(line, "\\ ") && 12 < strlen(line))
 			continue;
 
-		if (!get_sha1_hex(p, next_sha1)) {
+		if (!get_oid_hex(p, next_oid)) {
 			found_next = 1;
 			break;
 		}
 
 		/* Ignore commit comments */
-		if (!patchlen && memcmp(line, "diff ", 5))
+		if (!patchlen && !starts_with(line, "diff "))
 			continue;
 
 		/* Parsing diff header?  */
 		if (before == -1) {
-			if (!memcmp(line, "index ", 6))
+			if (starts_with(line, "index "))
 				continue;
-			else if (!memcmp(line, "--- ", 4))
+			else if (starts_with(line, "--- "))
 				before = after = 1;
 			else if (!isalpha(line[0]))
 				break;
@@ -96,17 +111,19 @@ static int get_one_patchid(unsigned char *next_sha1, git_SHA_CTX *ctx, struct st
 
 		/* Looking for a valid hunk header?  */
 		if (before == 0 && after == 0) {
-			if (!memcmp(line, "@@ -", 4)) {
+			if (starts_with(line, "@@ -")) {
 				/* Parse next hunk, but ignore line numbers.  */
 				scan_hunk_header(line, &before, &after);
 				continue;
 			}
 
 			/* Split at the end of the patch.  */
-			if (memcmp(line, "diff ", 5))
+			if (!starts_with(line, "diff "))
 				break;
 
 			/* Else we're parsing another header.  */
+			if (stable)
+				flush_one_hunk(result, &ctx);
 			before = after = -1;
 		}
 
@@ -119,39 +136,63 @@ static int get_one_patchid(unsigned char *next_sha1, git_SHA_CTX *ctx, struct st
 		/* Compute the sha without whitespace */
 		len = remove_space(line);
 		patchlen += len;
-		git_SHA1_Update(ctx, line, len);
+		git_SHA1_Update(&ctx, line, len);
 	}
 
 	if (!found_next)
-		hashclr(next_sha1);
+		oidclr(next_oid);
+
+	flush_one_hunk(result, &ctx);
 
 	return patchlen;
 }
 
-static void generate_id_list(void)
+static void generate_id_list(int stable)
 {
-	unsigned char sha1[20], n[20];
-	git_SHA_CTX ctx;
+	struct object_id oid, n, result;
 	int patchlen;
 	struct strbuf line_buf = STRBUF_INIT;
 
-	git_SHA1_Init(&ctx);
-	hashclr(sha1);
+	oidclr(&oid);
 	while (!feof(stdin)) {
-		patchlen = get_one_patchid(n, &ctx, &line_buf);
-		flush_current_id(patchlen, sha1, &ctx);
-		hashcpy(sha1, n);
+		patchlen = get_one_patchid(&n, &result, &line_buf, stable);
+		flush_current_id(patchlen, &oid, &result);
+		oidcpy(&oid, &n);
 	}
 	strbuf_release(&line_buf);
 }
 
-static const char patch_id_usage[] = "git patch-id < patch";
+static const char patch_id_usage[] = "git patch-id [--stable | --unstable]";
+
+static int git_patch_id_config(const char *var, const char *value, void *cb)
+{
+	int *stable = cb;
+
+	if (!strcmp(var, "patchid.stable")) {
+		*stable = git_config_bool(var, value);
+		return 0;
+	}
+
+	return git_default_config(var, value, cb);
+}
 
 int cmd_patch_id(int argc, const char **argv, const char *prefix)
 {
-	if (argc != 1)
+	int stable = -1;
+
+	git_config(git_patch_id_config, &stable);
+
+	/* If nothing is set, default to unstable. */
+	if (stable < 0)
+		stable = 0;
+
+	if (argc == 2 && !strcmp(argv[1], "--stable"))
+		stable = 1;
+	else if (argc == 2 && !strcmp(argv[1], "--unstable"))
+		stable = 0;
+	else if (argc != 1)
 		usage(patch_id_usage);
 
-	generate_id_list();
+	generate_id_list(stable);
 	return 0;
 }

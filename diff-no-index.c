@@ -15,8 +15,9 @@
 #include "log-tree.h"
 #include "builtin.h"
 #include "string-list.h"
+#include "dir.h"
 
-static int read_directory(const char *path, struct string_list *list)
+static int read_directory_contents(const char *path, struct string_list *list)
 {
 	DIR *dir;
 	struct dirent *e;
@@ -25,7 +26,7 @@ static int read_directory(const char *path, struct string_list *list)
 		return error("Could not open directory %s", path);
 
 	while ((e = readdir(dir)))
-		if (strcmp(".", e->d_name) && strcmp("..", e->d_name))
+		if (!is_dot_or_dotdot(e->d_name))
 			string_list_insert(list, e->d_name);
 
 	closedir(dir);
@@ -64,8 +65,7 @@ static int populate_from_stdin(struct diff_filespec *s)
 	size_t size = 0;
 
 	if (strbuf_read(&buf, 0, 0) < 0)
-		return error("error while reading from stdin %s",
-				     strerror(errno));
+		return error_errno("error while reading from stdin");
 
 	s->should_munmap = 0;
 	s->data = strbuf_detach(&buf, &size);
@@ -96,8 +96,27 @@ static int queue_diff(struct diff_options *o,
 	if (get_mode(name1, &mode1) || get_mode(name2, &mode2))
 		return -1;
 
-	if (mode1 && mode2 && S_ISDIR(mode1) != S_ISDIR(mode2))
-		return error("file/directory conflict: %s, %s", name1, name2);
+	if (mode1 && mode2 && S_ISDIR(mode1) != S_ISDIR(mode2)) {
+		struct diff_filespec *d1, *d2;
+
+		if (S_ISDIR(mode1)) {
+			/* 2 is file that is created */
+			d1 = noindex_filespec(NULL, 0);
+			d2 = noindex_filespec(name2, mode2);
+			name2 = NULL;
+			mode2 = 0;
+		} else {
+			/* 1 is file that is deleted */
+			d1 = noindex_filespec(name1, mode1);
+			d2 = noindex_filespec(NULL, 0);
+			name1 = NULL;
+			mode1 = 0;
+		}
+		/* emit that file */
+		diff_queue(&diff_queued_diff, d1, d2);
+
+		/* and then let the entire directory be created or deleted */
+	}
 
 	if (S_ISDIR(mode1) || S_ISDIR(mode2)) {
 		struct strbuf buffer1 = STRBUF_INIT;
@@ -107,24 +126,22 @@ static int queue_diff(struct diff_options *o,
 		int i1, i2, ret = 0;
 		size_t len1 = 0, len2 = 0;
 
-		if (name1 && read_directory(name1, &p1))
+		if (name1 && read_directory_contents(name1, &p1))
 			return -1;
-		if (name2 && read_directory(name2, &p2)) {
+		if (name2 && read_directory_contents(name2, &p2)) {
 			string_list_clear(&p1, 0);
 			return -1;
 		}
 
 		if (name1) {
 			strbuf_addstr(&buffer1, name1);
-			if (buffer1.len && buffer1.buf[buffer1.len - 1] != '/')
-				strbuf_addch(&buffer1, '/');
+			strbuf_complete(&buffer1, '/');
 			len1 = buffer1.len;
 		}
 
 		if (name2) {
 			strbuf_addstr(&buffer2, name2);
-			if (buffer2.len && buffer2.buf[buffer2.len - 1] != '/')
-				strbuf_addch(&buffer2, '/');
+			strbuf_complete(&buffer2, '/');
 			len2 = buffer2.len;
 		}
 
@@ -168,10 +185,8 @@ static int queue_diff(struct diff_options *o,
 		struct diff_filespec *d1, *d2;
 
 		if (DIFF_OPT_TST(o, REVERSE_DIFF)) {
-			unsigned tmp;
-			const char *tmp_c;
-			tmp = mode1; mode1 = mode2; mode2 = tmp;
-			tmp_c = name1; name1 = name2; name2 = tmp_c;
+			SWAP(mode1, mode2);
+			SWAP(name1, name2);
 		}
 
 		d1 = noindex_filespec(name1, mode1);
@@ -181,12 +196,50 @@ static int queue_diff(struct diff_options *o,
 	}
 }
 
+/* append basename of F to D */
+static void append_basename(struct strbuf *path, const char *dir, const char *file)
+{
+	const char *tail = strrchr(file, '/');
+
+	strbuf_addstr(path, dir);
+	while (path->len && path->buf[path->len - 1] == '/')
+		path->len--;
+	strbuf_addch(path, '/');
+	strbuf_addstr(path, tail ? tail + 1 : file);
+}
+
+/*
+ * DWIM "diff D F" into "diff D/F F" and "diff F D" into "diff F D/F"
+ * Note that we append the basename of F to D/, so "diff a/b/file D"
+ * becomes "diff a/b/file D/file", not "diff a/b/file D/a/b/file".
+ */
+static void fixup_paths(const char **path, struct strbuf *replacement)
+{
+	unsigned int isdir0, isdir1;
+
+	if (path[0] == file_from_standard_input ||
+	    path[1] == file_from_standard_input)
+		return;
+	isdir0 = is_directory(path[0]);
+	isdir1 = is_directory(path[1]);
+	if (isdir0 == isdir1)
+		return;
+	if (isdir0) {
+		append_basename(replacement, path[0], path[1]);
+		path[0] = replacement->buf;
+	} else {
+		append_basename(replacement, path[1], path[0]);
+		path[1] = replacement->buf;
+	}
+}
+
 void diff_no_index(struct rev_info *revs,
-		   int argc, const char **argv,
-		   const char *prefix)
+		   int argc, const char **argv)
 {
 	int i, prefixlen;
 	const char *paths[2];
+	struct strbuf replacement = STRBUF_INIT;
+	const char *prefix = revs->prefix;
 
 	diff_setup(&revs->diffopt);
 	for (i = 1; i < argc - 2; ) {
@@ -196,8 +249,9 @@ void diff_no_index(struct rev_info *revs,
 		else if (!strcmp(argv[i], "--"))
 			i++;
 		else {
-			j = diff_opt_parse(&revs->diffopt, argv + i, argc - i);
-			if (!j)
+			j = diff_opt_parse(&revs->diffopt, argv + i, argc - i,
+					   revs->prefix);
+			if (j <= 0)
 				die("invalid diff option/value: %s", argv[i]);
 			i += j;
 		}
@@ -216,11 +270,17 @@ void diff_no_index(struct rev_info *revs,
 			p = xstrdup(prefix_filename(prefix, prefixlen, p));
 		paths[i] = p;
 	}
+
+	fixup_paths(paths, &replacement);
+
 	revs->diffopt.skip_stat_unmatch = 1;
 	if (!revs->diffopt.output_format)
 		revs->diffopt.output_format = DIFF_FORMAT_PATCH;
 
 	DIFF_OPT_SET(&revs->diffopt, NO_INDEX);
+
+	DIFF_OPT_SET(&revs->diffopt, RELATIVE_NAME);
+	revs->diffopt.prefix = prefix;
 
 	revs->max_count = -2;
 	diff_setup_done(&revs->diffopt);
@@ -233,6 +293,8 @@ void diff_no_index(struct rev_info *revs,
 	diff_set_mnemonic_prefix(&revs->diffopt, "1/", "2/");
 	diffcore_std(&revs->diffopt);
 	diff_flush(&revs->diffopt);
+
+	strbuf_release(&replacement);
 
 	/*
 	 * The return code for --no-index imitates diff(1):

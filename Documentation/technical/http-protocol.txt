@@ -60,7 +60,7 @@ Because Git repositories are accessed by standard path components
 server administrators MAY use directory based permissions within
 their HTTP server to control repository access.
 
-Clients SHOULD support Basic authentication as described by RFC 2616.
+Clients SHOULD support Basic authentication as described by RFC 2617.
 Servers SHOULD support Basic authentication by relying upon the
 HTTP server placed in front of the Git server software.
 
@@ -319,7 +319,8 @@ Servers SHOULD support all capabilities defined here.
 Clients MUST send at least one "want" command in the request body.
 Clients MUST NOT reference an id in a "want" command which did not
 appear in the response obtained through ref discovery unless the
-server advertises capability `allow-tip-sha1-in-want`.
+server advertises capability `allow-tip-sha1-in-want` or
+`allow-reachable-sha1-in-want`.
 
   compute_request   =  want_list
 		       have_list
@@ -374,7 +375,7 @@ C: Send one `$GIT_URL/git-upload-pack` request:
    C: 0000
 
 The stream is organized into "commands", with each command
-appearing by itself in a pkt-line.  Within a command line
+appearing by itself in a pkt-line.  Within a command line,
 the text leading up to the first space is the command name,
 and the remainder of the line to the first LF is the value.
 Command lines are terminated with an LF as the last byte of

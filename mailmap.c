@@ -71,22 +71,17 @@ static void add_mapping(struct string_list *map,
 			char *old_name, char *old_email)
 {
 	struct mailmap_entry *me;
-	int index;
+	struct string_list_item *item;
 
 	if (old_email == NULL) {
 		old_email = new_email;
 		new_email = NULL;
 	}
 
-	if ((index = string_list_find_insert_index(map, old_email, 1)) < 0) {
-		/* mailmap entry exists, invert index value */
-		index = -1 - index;
-		me = (struct mailmap_entry *)map->items[index].util;
+	item = string_list_insert(map, old_email);
+	if (item->util) {
+		me = (struct mailmap_entry *)item->util;
 	} else {
-		/* create mailmap entry */
-		struct string_list_item *item;
-
-		item = string_list_insert_at_index(map, index, old_email);
 		me = xcalloc(1, sizeof(struct mailmap_entry));
 		me->namemap.strdup_strings = 1;
 		me->namemap.cmp = namemap_cmp;
@@ -94,8 +89,8 @@ static void add_mapping(struct string_list *map,
 	}
 
 	if (old_name == NULL) {
-		debug_mm("mailmap: adding (simple) entry for %s at index %d\n",
-			 old_email, index);
+		debug_mm("mailmap: adding (simple) entry for '%s'\n", old_email);
+
 		/* Replace current name and new email for simple entry */
 		if (new_name) {
 			free(me->name);
@@ -107,12 +102,9 @@ static void add_mapping(struct string_list *map,
 		}
 	} else {
 		struct mailmap_info *mi = xcalloc(1, sizeof(struct mailmap_info));
-		debug_mm("mailmap: adding (complex) entry for %s at index %d\n",
-			 old_email, index);
-		if (new_name)
-			mi->name = xstrdup(new_name);
-		if (new_email)
-			mi->email = xstrdup(new_email);
+		debug_mm("mailmap: adding (complex) entry for '%s'\n", old_email);
+		mi->name = xstrdup_or_null(new_name);
+		mi->email = xstrdup_or_null(new_email);
 		string_list_insert(&me->namemap, old_name)->util = mi;
 	}
 
@@ -168,11 +160,10 @@ static void read_mailmap_line(struct string_list *map, char *buffer,
 			char *cp;
 
 			free(*repo_abbrev);
-			*repo_abbrev = xmalloc(len);
 
 			for (cp = buffer + abblen; isspace(*cp); cp++)
 				; /* nothing */
-			strcpy(*repo_abbrev, cp);
+			*repo_abbrev = xstrdup(cp);
 		}
 		return;
 	}
@@ -196,8 +187,7 @@ static int read_mailmap_file(struct string_list *map, const char *filename,
 	if (!f) {
 		if (errno == ENOENT)
 			return 0;
-		return error("unable to open mailmap at %s: %s",
-			     filename, strerror(errno));
+		return error_errno("unable to open mailmap at %s", filename);
 	}
 
 	while (fgets(buffer, sizeof(buffer), f) != NULL)
@@ -257,7 +247,8 @@ int read_mailmap(struct string_list *map, char **repo_abbrev)
 		git_mailmap_blob = "HEAD:.mailmap";
 
 	err |= read_mailmap_file(map, ".mailmap", repo_abbrev);
-	err |= read_mailmap_blob(map, git_mailmap_blob, repo_abbrev);
+	if (startup_info->have_repository)
+		err |= read_mailmap_blob(map, git_mailmap_blob, repo_abbrev);
 	err |= read_mailmap_file(map, git_mailmap_file, repo_abbrev);
 	return err;
 }

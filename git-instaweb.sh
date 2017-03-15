@@ -20,6 +20,7 @@ start          start the web server
 restart        restart the web server
 "
 
+SUBDIRECTORY_OK=Yes
 . git-sh-setup
 
 fqgitdir="$GIT_DIR"
@@ -204,7 +205,7 @@ webrick_conf () {
 	# actual gitweb.cgi using a shell script to force it
   wrapper="$fqgitdir/gitweb/$httpd/wrapper.sh"
 	cat > "$wrapper" <<EOF
-#!/bin/sh
+#!@SHELL_PATH@
 # we use this shell script wrapper around the real gitweb.cgi since
 # there appears to be no other way to pass arbitrary environment variables
 # into the CGI process
@@ -345,7 +346,17 @@ PidFile "$fqgitdir/pid"
 Listen $bind$port
 EOF
 
-	for mod in mime dir env log_config
+	for mod in mpm_event mpm_prefork mpm_worker
+	do
+		if test -e $module_path/mod_${mod}.so
+		then
+			echo "LoadModule ${mod}_module " \
+			     "$module_path/mod_${mod}.so" >> "$conf"
+			# only one mpm module permitted
+			break
+		fi
+	done
+	for mod in mime dir env log_config authz_core
 	do
 		if test -e $module_path/mod_${mod}.so
 		then

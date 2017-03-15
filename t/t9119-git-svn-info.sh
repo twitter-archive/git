@@ -8,7 +8,7 @@ test_description='git svn info'
 
 # Tested with: svn, version 1.4.4 (r25188)
 # Tested with: svn, version 1.6.[12345689]
-v=`svn_cmd --version | sed -n -e 's/^svn, version \(1\.[0-9]*\.[0-9]*\).*$/\1/p'`
+v=$(svn_cmd --version | sed -n -e 's/^svn, version \(1\.[0-9]*\.[0-9]*\).*$/\1/p')
 case $v in
 1.[456].*)
 	;;
@@ -73,6 +73,36 @@ test_expect_success 'info .' "
 	(cd gitwc; git svn info .) > actual.info-dot &&
 	test_cmp_info expected.info-dot actual.info-dot
 	"
+
+test_expect_success 'info $(pwd)' '
+	(cd svnwc; svn info "$(pwd)") >expected.info-pwd &&
+	(cd gitwc; git svn info "$(pwd)") >actual.info-pwd &&
+	grep -v ^Path: <expected.info-pwd >expected.info-np &&
+	grep -v ^Path: <actual.info-pwd >actual.info-np &&
+	test_cmp_info expected.info-np actual.info-np &&
+	test "$(sed -ne \"/^Path:/ s!/svnwc!!\" <expected.info-pwd)" = \
+	     "$(sed -ne \"/^Path:/ s!/gitwc!!\" <actual.info-pwd)"
+	'
+
+test_expect_success 'info $(pwd)/../___wc' '
+	(cd svnwc; svn info "$(pwd)/../svnwc") >expected.info-pwd &&
+	(cd gitwc; git svn info "$(pwd)/../gitwc") >actual.info-pwd &&
+	grep -v ^Path: <expected.info-pwd >expected.info-np &&
+	grep -v ^Path: <actual.info-pwd >actual.info-np &&
+	test_cmp_info expected.info-np actual.info-np &&
+	test "$(sed -ne \"/^Path:/ s!/svnwc!!\" <expected.info-pwd)" = \
+	     "$(sed -ne \"/^Path:/ s!/gitwc!!\" <actual.info-pwd)"
+	'
+
+test_expect_success 'info $(pwd)/../___wc//file' '
+	(cd svnwc; svn info "$(pwd)/../svnwc//file") >expected.info-pwd &&
+	(cd gitwc; git svn info "$(pwd)/../gitwc//file") >actual.info-pwd &&
+	grep -v ^Path: <expected.info-pwd >expected.info-np &&
+	grep -v ^Path: <actual.info-pwd >actual.info-np &&
+	test_cmp_info expected.info-np actual.info-np &&
+	test "$(sed -ne \"/^Path:/ s!/svnwc!!\" <expected.info-pwd)" = \
+	     "$(sed -ne \"/^Path:/ s!/gitwc!!\" <actual.info-pwd)"
+	'
 
 test_expect_success 'info --url .' '
 	test "$(cd gitwc; git svn info --url .)" = "$quoted_svnrepo"

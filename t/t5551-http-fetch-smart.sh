@@ -2,12 +2,6 @@
 
 test_description='test smart fetching over http via http-backend'
 . ./test-lib.sh
-
-if test -n "$NO_CURL"; then
-	skip_all='skipping test, git built without http support'
-	test_done
-fi
-
 . "$TEST_DIRECTORY"/lib-httpd.sh
 start_httpd
 
@@ -49,12 +43,21 @@ cat >exp <<EOF
 < Content-Type: application/x-git-upload-pack-result
 EOF
 test_expect_success 'clone http repository' '
-	GIT_CURL_VERBOSE=1 git clone --quiet $HTTPD_URL/smart/repo.git clone 2>err &&
+	GIT_TRACE_CURL=true git clone --quiet $HTTPD_URL/smart/repo.git clone 2>err &&
 	test_cmp file clone/file &&
 	tr '\''\015'\'' Q <err |
 	sed -e "
 		s/Q\$//
 		/^[*] /d
+		/^== Info:/d
+		/^=> Send header, /d
+		/^=> Send header:$/d
+		/^<= Recv header, /d
+		/^<= Recv header:$/d
+		s/=> Send header: //
+		s/= Recv header://
+		/^<= Recv data/d
+		/^=> Send data/d
 		/^$/d
 		/^< $/d
 
@@ -83,7 +86,7 @@ test_expect_success 'clone http repository' '
 test_expect_success 'fetch changes via http' '
 	echo content >>file &&
 	git commit -a -m two &&
-	git push public
+	git push public &&
 	(cd clone && git pull) &&
 	test_cmp file clone/file
 '
@@ -114,6 +117,10 @@ test_expect_success 'follow redirects (302)' '
 
 test_expect_success 'redirects re-root further requests' '
 	git clone $HTTPD_URL/smart-redir-limited/repo.git repo-redir-limited
+'
+
+test_expect_success 're-rooting dies on insane schemes' '
+	test_must_fail git clone $HTTPD_URL/insane-redir/repo.git insane
 '
 
 test_expect_success 'clone from password-protected repository' '
@@ -169,7 +176,7 @@ test_expect_success 'GIT_SMART_HTTP can disable smart http' '
 '
 
 test_expect_success 'invalid Content-Type rejected' '
-	test_must_fail git clone $HTTPD_URL/broken_smart/repo.git 2>actual
+	test_must_fail git clone $HTTPD_URL/broken_smart/repo.git 2>actual &&
 	grep "not valid:" actual
 '
 
@@ -209,43 +216,152 @@ test_expect_success 'cookies stored in http.cookiefile when http.savecookies set
 	git config http.cookiefile cookies.txt &&
 	git config http.savecookies true &&
 	git ls-remote $HTTPD_URL/smart_cookies/repo.git master &&
-	tail -3 cookies.txt > cookies_tail.txt
+	tail -3 cookies.txt >cookies_tail.txt &&
 	test_cmp expect_cookies.txt cookies_tail.txt
 '
 
-test -n "$GIT_TEST_LONG" && test_set_prereq EXPENSIVE
+test_expect_success 'transfer.hiderefs works over smart-http' '
+	test_commit hidden &&
+	test_commit visible &&
+	git push public HEAD^:refs/heads/a HEAD:refs/heads/b &&
+	git --git-dir="$HTTPD_DOCUMENT_ROOT_PATH/repo.git" \
+		config transfer.hiderefs refs/heads/a &&
+	git clone --bare "$HTTPD_URL/smart/repo.git" hidden.git &&
+	test_must_fail git -C hidden.git rev-parse --verify a &&
+	git -C hidden.git rev-parse --verify b
+'
 
-test_expect_success EXPENSIVE 'create 50,000 tags in the repo' '
-	(
-	cd "$HTTPD_DOCUMENT_ROOT_PATH/repo.git" &&
-	for i in `test_seq 50000`
+# create an arbitrary number of tags, numbered from tag-$1 to tag-$2
+create_tags () {
+	rm -f marks &&
+	for i in $(test_seq "$1" "$2")
 	do
-		echo "commit refs/heads/too-many-refs"
-		echo "mark :$i"
-		echo "committer git <git@example.com> $i +0000"
-		echo "data 0"
-		echo "M 644 inline bla.txt"
-		echo "data 4"
-		echo "bla"
+		# don't use here-doc, because it requires a process
+		# per loop iteration
+		echo "commit refs/heads/too-many-refs-$1" &&
+		echo "mark :$i" &&
+		echo "committer git <git@example.com> $i +0000" &&
+		echo "data 0" &&
+		echo "M 644 inline bla.txt" &&
+		echo "data 4" &&
+		echo "bla" &&
 		# make every commit dangling by always
 		# rewinding the branch after each commit
-		echo "reset refs/heads/too-many-refs"
-		echo "from :1"
+		echo "reset refs/heads/too-many-refs-$1" &&
+		echo "from :$1"
 	done | git fast-import --export-marks=marks &&
 
 	# now assign tags to all the dangling commits we created above
 	tag=$(perl -e "print \"bla\" x 30") &&
 	sed -e "s|^:\([^ ]*\) \(.*\)$|\2 refs/tags/$tag-\1|" <marks >>packed-refs
+}
+
+test_expect_success 'create 2,000 tags in the repo' '
+	(
+		cd "$HTTPD_DOCUMENT_ROOT_PATH/repo.git" &&
+		create_tags 1 2000
 	)
 '
 
-test_expect_success EXPENSIVE 'clone the 50,000 tag repo to check OS command line overflow' '
-	git clone $HTTPD_URL/smart/repo.git too-many-refs 2>err &&
-	test_line_count = 0 err &&
+test_expect_success CMDLINE_LIMIT \
+	'clone the 2,000 tag repo to check OS command line overflow' '
+	run_with_limited_cmdline git clone $HTTPD_URL/smart/repo.git too-many-refs &&
 	(
 		cd too-many-refs &&
-		test $(git for-each-ref refs/tags | wc -l) = 50000
+		git for-each-ref refs/tags >actual &&
+		test_line_count = 2000 actual
 	)
+'
+
+test_expect_success 'large fetch-pack requests can be split across POSTs' '
+	GIT_TRACE_CURL=true git -c http.postbuffer=65536 \
+		clone --bare "$HTTPD_URL/smart/repo.git" split.git 2>err &&
+	grep "^=> Send header: POST" err >posts &&
+	test_line_count = 2 posts
+'
+
+test_expect_success 'test allowreachablesha1inwant' '
+	test_when_finished "rm -rf test_reachable.git" &&
+	server="$HTTPD_DOCUMENT_ROOT_PATH/repo.git" &&
+	master_sha=$(git -C "$server" rev-parse refs/heads/master) &&
+	git -C "$server" config uploadpack.allowreachablesha1inwant 1 &&
+
+	git init --bare test_reachable.git &&
+	git -C test_reachable.git remote add origin "$HTTPD_URL/smart/repo.git" &&
+	git -C test_reachable.git fetch origin "$master_sha"
+'
+
+test_expect_success 'test allowreachablesha1inwant with unreachable' '
+	test_when_finished "rm -rf test_reachable.git; git reset --hard $(git rev-parse HEAD)" &&
+
+	#create unreachable sha
+	echo content >file2 &&
+	git add file2 &&
+	git commit -m two &&
+	git push public HEAD:refs/heads/doomed &&
+	git push public :refs/heads/doomed &&
+
+	server="$HTTPD_DOCUMENT_ROOT_PATH/repo.git" &&
+	master_sha=$(git -C "$server" rev-parse refs/heads/master) &&
+	git -C "$server" config uploadpack.allowreachablesha1inwant 1 &&
+
+	git init --bare test_reachable.git &&
+	git -C test_reachable.git remote add origin "$HTTPD_URL/smart/repo.git" &&
+	test_must_fail git -C test_reachable.git fetch origin "$(git rev-parse HEAD)"
+'
+
+test_expect_success 'test allowanysha1inwant with unreachable' '
+	test_when_finished "rm -rf test_reachable.git; git reset --hard $(git rev-parse HEAD)" &&
+
+	#create unreachable sha
+	echo content >file2 &&
+	git add file2 &&
+	git commit -m two &&
+	git push public HEAD:refs/heads/doomed &&
+	git push public :refs/heads/doomed &&
+
+	server="$HTTPD_DOCUMENT_ROOT_PATH/repo.git" &&
+	master_sha=$(git -C "$server" rev-parse refs/heads/master) &&
+	git -C "$server" config uploadpack.allowreachablesha1inwant 1 &&
+
+	git init --bare test_reachable.git &&
+	git -C test_reachable.git remote add origin "$HTTPD_URL/smart/repo.git" &&
+	test_must_fail git -C test_reachable.git fetch origin "$(git rev-parse HEAD)" &&
+
+	git -C "$server" config uploadpack.allowanysha1inwant 1 &&
+	git -C test_reachable.git fetch origin "$(git rev-parse HEAD)"
+'
+
+test_expect_success EXPENSIVE 'http can handle enormous ref negotiation' '
+	(
+		cd "$HTTPD_DOCUMENT_ROOT_PATH/repo.git" &&
+		create_tags 2001 50000
+	) &&
+	git -C too-many-refs fetch -q --tags &&
+	(
+		cd "$HTTPD_DOCUMENT_ROOT_PATH/repo.git" &&
+		create_tags 50001 100000
+	) &&
+	git -C too-many-refs fetch -q --tags &&
+	git -C too-many-refs for-each-ref refs/tags >tags &&
+	test_line_count = 100000 tags
+'
+
+test_expect_success 'custom http headers' '
+	test_must_fail git -c http.extraheader="x-magic-two: cadabra" \
+		fetch "$HTTPD_URL/smart_headers/repo.git" &&
+	git -c http.extraheader="x-magic-one: abra" \
+	    -c http.extraheader="x-magic-two: cadabra" \
+	    fetch "$HTTPD_URL/smart_headers/repo.git" &&
+	git update-index --add --cacheinfo 160000,$(git rev-parse HEAD),sub &&
+	git config -f .gitmodules submodule.sub.path sub &&
+	git config -f .gitmodules submodule.sub.url \
+		"$HTTPD_URL/smart_headers/repo.git" &&
+	git submodule init sub &&
+	test_must_fail git submodule update sub &&
+	git -c http.extraheader="x-magic-one: abra" \
+	    -c http.extraheader="x-magic-two: cadabra" \
+		submodule update sub
 '
 
 stop_httpd

@@ -55,7 +55,7 @@ test_expect_success 'clone to target directory with --stdlayout' '
 test_expect_success 'init without -s/-T/-b/-t does not warn' '
 	test ! -d trunk &&
 	git svn init "$svnrepo"/project/trunk trunk 2>warning &&
-	test_must_fail grep -q prefix warning &&
+	! grep -q prefix warning &&
 	rm -rf trunk &&
 	rm -f warning
 	'
@@ -63,7 +63,7 @@ test_expect_success 'init without -s/-T/-b/-t does not warn' '
 test_expect_success 'clone without -s/-T/-b/-t does not warn' '
 	test ! -d trunk &&
 	git svn clone "$svnrepo"/project/trunk 2>warning &&
-	test_must_fail grep -q prefix warning &&
+	! grep -q prefix warning &&
 	rm -rf trunk &&
 	rm -f warning
 	'
@@ -83,40 +83,46 @@ EOF
 	rm -f expect actual
 }
 
-test_expect_success 'init with -s/-T/-b/-t without --prefix warns' '
+test_expect_success 'init with -s/-T/-b/-t assumes --prefix=origin/' '
 	test ! -d project &&
 	git svn init -s "$svnrepo"/project project 2>warning &&
-	grep -q prefix warning &&
-	test_svn_configured_prefix "" &&
+	! grep -q prefix warning &&
+	test_svn_configured_prefix "origin/" &&
 	rm -rf project &&
 	rm -f warning
 	'
 
-test_expect_success 'clone with -s/-T/-b/-t without --prefix warns' '
+test_expect_success 'clone with -s/-T/-b/-t assumes --prefix=origin/' '
 	test ! -d project &&
 	git svn clone -s "$svnrepo"/project 2>warning &&
-	grep -q prefix warning &&
+	! grep -q prefix warning &&
+	test_svn_configured_prefix "origin/" &&
+	rm -rf project &&
+	rm -f warning
+	'
+
+test_expect_success 'init with -s/-T/-b/-t and --prefix "" still works' '
+	test ! -d project &&
+	git svn init -s "$svnrepo"/project project --prefix "" 2>warning &&
+	! grep -q prefix warning &&
 	test_svn_configured_prefix "" &&
 	rm -rf project &&
 	rm -f warning
 	'
 
-test_expect_success 'init with -s/-T/-b/-t and --prefix does not warn' '
+test_expect_success 'clone with -s/-T/-b/-t and --prefix "" still works' '
 	test ! -d project &&
-	git svn init -s "$svnrepo"/project project --prefix="" 2>warning &&
-	test_must_fail grep -q prefix warning &&
+	git svn clone -s "$svnrepo"/project --prefix "" 2>warning &&
+	! grep -q prefix warning &&
 	test_svn_configured_prefix "" &&
 	rm -rf project &&
 	rm -f warning
 	'
 
-test_expect_success 'clone with -s/-T/-b/-t and --prefix does not warn' '
+test_expect_success 'init with -T as a full url works' '
 	test ! -d project &&
-	git svn clone -s "$svnrepo"/project --prefix="" 2>warning &&
-	test_must_fail grep -q prefix warning &&
-	test_svn_configured_prefix "" &&
-	rm -rf project &&
-	rm -f warning
+	git svn init -T "$svnrepo"/project/trunk project &&
+	rm -rf project
 	'
 
 test_done

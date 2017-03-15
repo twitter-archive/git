@@ -8,21 +8,32 @@ test_description='Test git update-ref and basic ref logging'
 
 Z=$_z40
 
-test_expect_success setup '
+m=refs/heads/master
+n_dir=refs/heads/gu
+n=$n_dir/fixes
+outside=refs/foo
+bare=bare-repo
 
+create_test_commits ()
+{
+	prfx="$1"
 	for name in A B C D E F
 	do
 		test_tick &&
 		T=$(git write-tree) &&
 		sha1=$(echo $name | git commit-tree $T) &&
-		eval $name=$sha1
+		eval $prfx$name=$sha1
 	done
+}
 
+test_expect_success setup '
+	create_test_commits "" &&
+	mkdir $bare &&
+	cd $bare &&
+	git init --bare &&
+	create_test_commits "bare" &&
+	cd -
 '
-
-m=refs/heads/master
-n_dir=refs/heads/gu
-n=$n_dir/fixes
 
 test_expect_success \
 	"create $m" \
@@ -74,6 +85,97 @@ test_expect_success "delete $m (by HEAD)" '
 '
 rm -f .git/$m
 
+test_expect_success "deleting current branch adds message to HEAD's log" '
+	git update-ref $m $A &&
+	git symbolic-ref HEAD $m &&
+	git update-ref -m delete-$m -d $m &&
+	! test -f .git/$m &&
+	grep "delete-$m$" .git/logs/HEAD
+'
+rm -f .git/$m
+
+test_expect_success "deleting by HEAD adds message to HEAD's log" '
+	git update-ref $m $A &&
+	git symbolic-ref HEAD $m &&
+	git update-ref -m delete-by-head -d HEAD &&
+	! test -f .git/$m &&
+	grep "delete-by-head$" .git/logs/HEAD
+'
+rm -f .git/$m
+
+test_expect_success 'update-ref does not create reflogs by default' '
+	test_when_finished "git update-ref -d $outside" &&
+	git update-ref $outside $A &&
+	git rev-parse $A >expect &&
+	git rev-parse $outside >actual &&
+	test_cmp expect actual &&
+	test_must_fail git reflog exists $outside
+'
+
+test_expect_success 'update-ref creates reflogs with --create-reflog' '
+	test_when_finished "git update-ref -d $outside" &&
+	git update-ref --create-reflog $outside $A &&
+	git rev-parse $A >expect &&
+	git rev-parse $outside >actual &&
+	test_cmp expect actual &&
+	git reflog exists $outside
+'
+
+test_expect_success 'creates no reflog in bare repository' '
+	git -C $bare update-ref $m $bareA &&
+	git -C $bare rev-parse $bareA >expect &&
+	git -C $bare rev-parse $m >actual &&
+	test_cmp expect actual &&
+	test_must_fail git -C $bare reflog exists $m
+'
+
+test_expect_success 'core.logAllRefUpdates=true creates reflog in bare repository' '
+	test_when_finished "git -C $bare config --unset core.logAllRefUpdates && \
+		rm $bare/logs/$m" &&
+	git -C $bare config core.logAllRefUpdates true &&
+	git -C $bare update-ref $m $bareB &&
+	git -C $bare rev-parse $bareB >expect &&
+	git -C $bare rev-parse $m >actual &&
+	test_cmp expect actual &&
+	git -C $bare reflog exists $m
+'
+
+test_expect_success 'core.logAllRefUpdates=true does not create reflog by default' '
+	test_config core.logAllRefUpdates true &&
+	test_when_finished "git update-ref -d $outside" &&
+	git update-ref $outside $A &&
+	git rev-parse $A >expect &&
+	git rev-parse $outside >actual &&
+	test_cmp expect actual &&
+	test_must_fail git reflog exists $outside
+'
+
+test_expect_success 'core.logAllRefUpdates=always creates reflog by default' '
+	test_config core.logAllRefUpdates always &&
+	test_when_finished "git update-ref -d $outside" &&
+	git update-ref $outside $A &&
+	git rev-parse $A >expect &&
+	git rev-parse $outside >actual &&
+	test_cmp expect actual &&
+	git reflog exists $outside
+'
+
+test_expect_success 'core.logAllRefUpdates=always creates no reflog for ORIG_HEAD' '
+	test_config core.logAllRefUpdates always &&
+	git update-ref ORIG_HEAD $A &&
+	test_must_fail git reflog exists ORIG_HEAD
+'
+
+test_expect_success '--no-create-reflog overrides core.logAllRefUpdates=always' '
+	test_config core.logAllRefUpdates true &&
+	test_when_finished "git update-ref -d $outside" &&
+	git update-ref --no-create-reflog $outside $A &&
+	git rev-parse $A >expect &&
+	git rev-parse $outside >actual &&
+	test_cmp expect actual &&
+	test_must_fail git reflog exists $outside
+'
+
 test_expect_success \
 	"create $m (by HEAD)" \
 	"git update-ref HEAD $A &&
@@ -110,6 +212,32 @@ test_expect_success "delete symref without dereference when the referred ref is 
 cp -f .git/HEAD.orig .git/HEAD
 git update-ref -d $m
 
+test_expect_success 'update-ref -d is not confused by self-reference' '
+	git symbolic-ref refs/heads/self refs/heads/self &&
+	test_when_finished "rm -f .git/refs/heads/self" &&
+	test_path_is_file .git/refs/heads/self &&
+	test_must_fail git update-ref -d refs/heads/self &&
+	test_path_is_file .git/refs/heads/self
+'
+
+test_expect_success 'update-ref --no-deref -d can delete self-reference' '
+	git symbolic-ref refs/heads/self refs/heads/self &&
+	test_when_finished "rm -f .git/refs/heads/self" &&
+	test_path_is_file .git/refs/heads/self &&
+	git update-ref --no-deref -d refs/heads/self &&
+	test_path_is_missing .git/refs/heads/self
+'
+
+test_expect_success 'update-ref --no-deref -d can delete reference to bad ref' '
+	>.git/refs/heads/bad &&
+	test_when_finished "rm -f .git/refs/heads/bad" &&
+	git symbolic-ref refs/heads/ref-to-bad refs/heads/bad &&
+	test_when_finished "rm -f .git/refs/heads/ref-to-bad" &&
+	test_path_is_file .git/refs/heads/ref-to-bad &&
+	git update-ref --no-deref -d refs/heads/ref-to-bad &&
+	test_path_is_missing .git/refs/heads/ref-to-bad
+'
+
 test_expect_success '(not) create HEAD with old sha1' "
 	test_must_fail git update-ref HEAD $A $B
 "
@@ -129,12 +257,11 @@ test_expect_success "(not) changed .git/$m" "
 '
 rm -f .git/$m
 
-: a repository with working tree always has reflog these days...
-: >.git/logs/refs/heads/master
+rm -f .git/logs/refs/heads/master
 test_expect_success \
 	"create $m (logged by touch)" \
 	'GIT_COMMITTER_DATE="2005-05-26 23:30" \
-	 git update-ref HEAD '"$A"' -m "Initial Creation" &&
+	 git update-ref --create-reflog HEAD '"$A"' -m "Initial Creation" &&
 	 test '"$A"' = $(cat .git/'"$m"')'
 test_expect_success \
 	"update $m (logged by touch)" \
@@ -146,6 +273,33 @@ test_expect_success \
 	'GIT_COMMITTER_DATE="2005-05-26 23:41" \
 	 git update-ref HEAD'" $A &&
 	 test $A"' = $(cat .git/'"$m"')'
+
+test_expect_success "empty directory removal" '
+	git branch d1/d2/r1 HEAD &&
+	git branch d1/r2 HEAD &&
+	test -f .git/refs/heads/d1/d2/r1 &&
+	test -f .git/logs/refs/heads/d1/d2/r1 &&
+	git branch -d d1/d2/r1 &&
+	! test -e .git/refs/heads/d1/d2 &&
+	! test -e .git/logs/refs/heads/d1/d2 &&
+	test -f .git/refs/heads/d1/r2 &&
+	test -f .git/logs/refs/heads/d1/r2
+'
+
+test_expect_success "symref empty directory removal" '
+	git branch e1/e2/r1 HEAD &&
+	git branch e1/r2 HEAD &&
+	git checkout e1/e2/r1 &&
+	test_when_finished "git checkout master" &&
+	test -f .git/refs/heads/e1/e2/r1 &&
+	test -f .git/logs/refs/heads/e1/e2/r1 &&
+	git update-ref -d HEAD &&
+	! test -e .git/refs/heads/e1/e2 &&
+	! test -e .git/logs/refs/heads/e1/e2 &&
+	test -f .git/refs/heads/e1/r2 &&
+	test -f .git/logs/refs/heads/e1/r2 &&
+	test -f .git/logs/HEAD
+'
 
 cat >expect <<EOF
 $Z $A $GIT_COMMITTER_NAME <$GIT_COMMITTER_EMAIL> 1117150200 +0000	Initial Creation
@@ -235,7 +389,7 @@ test_expect_success \
 	'rm -f o e &&
 	 git rev-parse --verify "master@{2005-05-26 23:33:01}" >o 2>e &&
 	 test '"$B"' = $(cat o) &&
-	 test "warning: Log .git/logs/'"$m has gap after $gd"'." = "$(cat e)"'
+	 test "warning: Log for ref '"$m has gap after $gd"'." = "$(cat e)"'
 test_expect_success \
 	'Query "master@{2005-05-26 23:38:00}" (middle of history)' \
 	'rm -f o e &&
@@ -253,7 +407,7 @@ test_expect_success \
 	'rm -f o e &&
 	 git rev-parse --verify "master@{2005-05-28}" >o 2>e &&
 	 test '"$D"' = $(cat o) &&
-	 test "warning: Log .git/logs/'"$m unexpectedly ended on $ld"'." = "$(cat e)"'
+	 test "warning: Log for ref '"$m unexpectedly ended on $ld"'." = "$(cat e)"'
 
 
 rm -f .git/$m .git/logs/$m expect
@@ -317,7 +471,7 @@ test_expect_success 'stdin test setup' '
 
 test_expect_success '-z fails without --stdin' '
 	test_must_fail git update-ref -z $m $m $m 2>err &&
-	grep "usage: git update-ref" err
+	test_i18ngrep "usage: git update-ref" err
 '
 
 test_expect_success 'stdin works with no input' '
@@ -350,88 +504,76 @@ test_expect_success 'stdin fails on unknown command' '
 	grep "fatal: unknown command: unknown $a" err
 '
 
-test_expect_success 'stdin fails on badly quoted input' '
+test_expect_success 'stdin fails on unbalanced quotes' '
 	echo "create $a \"master" >stdin &&
 	test_must_fail git update-ref --stdin <stdin 2>err &&
 	grep "fatal: badly quoted argument: \\\"master" err
 '
 
-test_expect_success 'stdin fails on arguments not separated by space' '
+test_expect_success 'stdin fails on invalid escape' '
+	echo "create $a \"ma\zter\"" >stdin &&
+	test_must_fail git update-ref --stdin <stdin 2>err &&
+	grep "fatal: badly quoted argument: \\\"ma\\\\zter\\\"" err
+'
+
+test_expect_success 'stdin fails on junk after quoted argument' '
 	echo "create \"$a\"master" >stdin &&
 	test_must_fail git update-ref --stdin <stdin 2>err &&
-	grep "fatal: expected SP but got: master" err
+	grep "fatal: unexpected character after quoted argument: \\\"$a\\\"master" err
 '
 
 test_expect_success 'stdin fails create with no ref' '
 	echo "create " >stdin &&
 	test_must_fail git update-ref --stdin <stdin 2>err &&
-	grep "fatal: create line missing <ref>" err
-'
-
-test_expect_success 'stdin fails create with bad ref name' '
-	echo "create ~a $m" >stdin &&
-	test_must_fail git update-ref --stdin <stdin 2>err &&
-	grep "fatal: invalid ref format: ~a" err
+	grep "fatal: create: missing <ref>" err
 '
 
 test_expect_success 'stdin fails create with no new value' '
 	echo "create $a" >stdin &&
 	test_must_fail git update-ref --stdin <stdin 2>err &&
-	grep "fatal: create $a missing <newvalue>" err
+	grep "fatal: create $a: missing <newvalue>" err
 '
 
 test_expect_success 'stdin fails create with too many arguments' '
 	echo "create $a $m $m" >stdin &&
 	test_must_fail git update-ref --stdin <stdin 2>err &&
-	grep "fatal: create $a has extra input:  $m" err
+	grep "fatal: create $a: extra input:  $m" err
 '
 
 test_expect_success 'stdin fails update with no ref' '
 	echo "update " >stdin &&
 	test_must_fail git update-ref --stdin <stdin 2>err &&
-	grep "fatal: update line missing <ref>" err
-'
-
-test_expect_success 'stdin fails update with bad ref name' '
-	echo "update ~a $m" >stdin &&
-	test_must_fail git update-ref --stdin <stdin 2>err &&
-	grep "fatal: invalid ref format: ~a" err
+	grep "fatal: update: missing <ref>" err
 '
 
 test_expect_success 'stdin fails update with no new value' '
 	echo "update $a" >stdin &&
 	test_must_fail git update-ref --stdin <stdin 2>err &&
-	grep "fatal: update $a missing <newvalue>" err
+	grep "fatal: update $a: missing <newvalue>" err
 '
 
 test_expect_success 'stdin fails update with too many arguments' '
 	echo "update $a $m $m $m" >stdin &&
 	test_must_fail git update-ref --stdin <stdin 2>err &&
-	grep "fatal: update $a has extra input:  $m" err
+	grep "fatal: update $a: extra input:  $m" err
 '
 
 test_expect_success 'stdin fails delete with no ref' '
 	echo "delete " >stdin &&
 	test_must_fail git update-ref --stdin <stdin 2>err &&
-	grep "fatal: delete line missing <ref>" err
-'
-
-test_expect_success 'stdin fails delete with bad ref name' '
-	echo "delete ~a $m" >stdin &&
-	test_must_fail git update-ref --stdin <stdin 2>err &&
-	grep "fatal: invalid ref format: ~a" err
+	grep "fatal: delete: missing <ref>" err
 '
 
 test_expect_success 'stdin fails delete with too many arguments' '
 	echo "delete $a $m $m" >stdin &&
 	test_must_fail git update-ref --stdin <stdin 2>err &&
-	grep "fatal: delete $a has extra input:  $m" err
+	grep "fatal: delete $a: extra input:  $m" err
 '
 
 test_expect_success 'stdin fails verify with too many arguments' '
 	echo "verify $a $m $m" >stdin &&
 	test_must_fail git update-ref --stdin <stdin 2>err &&
-	grep "fatal: verify $a has extra input:  $m" err
+	grep "fatal: verify $a: extra input:  $m" err
 '
 
 test_expect_success 'stdin fails option with unknown name' '
@@ -447,11 +589,49 @@ test_expect_success 'stdin fails with duplicate refs' '
 	create $a $m
 	EOF
 	test_must_fail git update-ref --stdin <stdin 2>err &&
-	grep "fatal: Multiple updates for ref '"'"'$a'"'"' not allowed." err
+	grep "fatal: multiple updates for ref '"'"'$a'"'"' not allowed." err
 '
 
 test_expect_success 'stdin create ref works' '
 	echo "create $a $m" >stdin &&
+	git update-ref --stdin <stdin &&
+	git rev-parse $m >expect &&
+	git rev-parse $a >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'stdin does not create reflogs by default' '
+	test_when_finished "git update-ref -d $outside" &&
+	echo "create $outside $m" >stdin &&
+	git update-ref --stdin <stdin &&
+	git rev-parse $m >expect &&
+	git rev-parse $outside >actual &&
+	test_cmp expect actual &&
+	test_must_fail git reflog exists $outside
+'
+
+test_expect_success 'stdin creates reflogs with --create-reflog' '
+	test_when_finished "git update-ref -d $outside" &&
+	echo "create $outside $m" >stdin &&
+	git update-ref --create-reflog --stdin <stdin &&
+	git rev-parse $m >expect &&
+	git rev-parse $outside >actual &&
+	test_cmp expect actual &&
+	git reflog exists $outside
+'
+
+test_expect_success 'stdin succeeds with quoted argument' '
+	git update-ref -d $a &&
+	echo "create $a \"$m\"" >stdin &&
+	git update-ref --stdin <stdin &&
+	git rev-parse $m >expect &&
+	git rev-parse $a >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'stdin succeeds with escaped character' '
+	git update-ref -d $a &&
+	echo "create $a \"ma\\163ter\"" >stdin &&
 	git update-ref --stdin <stdin &&
 	git rev-parse $m >expect &&
 	git rev-parse $a >actual &&
@@ -487,28 +667,28 @@ test_expect_success 'stdin create ref works with path with space to blob' '
 test_expect_success 'stdin update ref fails with wrong old value' '
 	echo "update $c $m $m~1" >stdin &&
 	test_must_fail git update-ref --stdin <stdin 2>err &&
-	grep "fatal: Cannot lock the ref '"'"'$c'"'"'" err &&
+	grep "fatal: cannot lock ref '"'"'$c'"'"'" err &&
 	test_must_fail git rev-parse --verify -q $c
 '
 
 test_expect_success 'stdin update ref fails with bad old value' '
 	echo "update $c $m does-not-exist" >stdin &&
 	test_must_fail git update-ref --stdin <stdin 2>err &&
-	grep "fatal: invalid old value for ref $c: does-not-exist" err &&
+	grep "fatal: update $c: invalid <oldvalue>: does-not-exist" err &&
 	test_must_fail git rev-parse --verify -q $c
 '
 
 test_expect_success 'stdin create ref fails with bad new value' '
 	echo "create $c does-not-exist" >stdin &&
 	test_must_fail git update-ref --stdin <stdin 2>err &&
-	grep "fatal: invalid new value for ref $c: does-not-exist" err &&
+	grep "fatal: create $c: invalid <newvalue>: does-not-exist" err &&
 	test_must_fail git rev-parse --verify -q $c
 '
 
 test_expect_success 'stdin create ref fails with zero new value' '
 	echo "create $c " >stdin &&
 	test_must_fail git update-ref --stdin <stdin 2>err &&
-	grep "fatal: create $c given zero new value" err &&
+	grep "fatal: create $c: zero <newvalue>" err &&
 	test_must_fail git rev-parse --verify -q $c
 '
 
@@ -523,7 +703,7 @@ test_expect_success 'stdin update ref works with right old value' '
 test_expect_success 'stdin delete ref fails with wrong old value' '
 	echo "delete $a $m~1" >stdin &&
 	test_must_fail git update-ref --stdin <stdin 2>err &&
-	grep "fatal: Cannot lock the ref '"'"'$a'"'"'" err &&
+	grep "fatal: cannot lock ref '"'"'$a'"'"'" err &&
 	git rev-parse $m >expect &&
 	git rev-parse $a >actual &&
 	test_cmp expect actual
@@ -532,7 +712,7 @@ test_expect_success 'stdin delete ref fails with wrong old value' '
 test_expect_success 'stdin delete ref fails with zero old value' '
 	echo "delete $a " >stdin &&
 	test_must_fail git update-ref --stdin <stdin 2>err &&
-	grep "fatal: delete $a given zero old value" err &&
+	grep "fatal: delete $a: zero <oldvalue>" err &&
 	git rev-parse $m >expect &&
 	git rev-parse $a >actual &&
 	test_cmp expect actual
@@ -587,6 +767,52 @@ test_expect_success 'stdin update/create/verify combination works' '
 	test_must_fail git rev-parse --verify -q $c
 '
 
+test_expect_success 'stdin verify succeeds for correct value' '
+	git rev-parse $m >expect &&
+	echo "verify $m $m" >stdin &&
+	git update-ref --stdin <stdin &&
+	git rev-parse $m >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'stdin verify succeeds for missing reference' '
+	echo "verify refs/heads/missing $Z" >stdin &&
+	git update-ref --stdin <stdin &&
+	test_must_fail git rev-parse --verify -q refs/heads/missing
+'
+
+test_expect_success 'stdin verify treats no value as missing' '
+	echo "verify refs/heads/missing" >stdin &&
+	git update-ref --stdin <stdin &&
+	test_must_fail git rev-parse --verify -q refs/heads/missing
+'
+
+test_expect_success 'stdin verify fails for wrong value' '
+	git rev-parse $m >expect &&
+	echo "verify $m $m~1" >stdin &&
+	test_must_fail git update-ref --stdin <stdin &&
+	git rev-parse $m >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'stdin verify fails for mistaken null value' '
+	git rev-parse $m >expect &&
+	echo "verify $m $Z" >stdin &&
+	test_must_fail git update-ref --stdin <stdin &&
+	git rev-parse $m >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'stdin verify fails for mistaken empty value' '
+	M=$(git rev-parse $m) &&
+	test_when_finished "git update-ref $m $M" &&
+	git rev-parse $m >expect &&
+	echo "verify $m" >stdin &&
+	test_must_fail git update-ref --stdin <stdin &&
+	git rev-parse $m >actual &&
+	test_cmp expect actual
+'
+
 test_expect_success 'stdin update refs works with identity updates' '
 	cat >stdin <<-EOF &&
 	update $a $m $m
@@ -610,7 +836,7 @@ test_expect_success 'stdin update refs fails with wrong old value' '
 	update $c  ''
 	EOF
 	test_must_fail git update-ref --stdin <stdin 2>err &&
-	grep "fatal: Cannot lock the ref '"'"'$c'"'"'" err &&
+	grep "fatal: cannot lock ref '"'"'$c'"'"'" err &&
 	git rev-parse $m >expect &&
 	git rev-parse $a >actual &&
 	test_cmp expect actual &&
@@ -673,19 +899,13 @@ test_expect_success 'stdin -z fails on unknown command' '
 test_expect_success 'stdin -z fails create with no ref' '
 	printf $F "create " >stdin &&
 	test_must_fail git update-ref -z --stdin <stdin 2>err &&
-	grep "fatal: create line missing <ref>" err
-'
-
-test_expect_success 'stdin -z fails create with bad ref name' '
-	printf $F "create ~a " "$m" >stdin &&
-	test_must_fail git update-ref -z --stdin <stdin 2>err &&
-	grep "fatal: invalid ref format: ~a " err
+	grep "fatal: create: missing <ref>" err
 '
 
 test_expect_success 'stdin -z fails create with no new value' '
 	printf $F "create $a" >stdin &&
 	test_must_fail git update-ref -z --stdin <stdin 2>err &&
-	grep "fatal: create $a missing <newvalue>" err
+	grep "fatal: create $a: unexpected end of input when reading <newvalue>" err
 '
 
 test_expect_success 'stdin -z fails create with too many arguments' '
@@ -697,25 +917,33 @@ test_expect_success 'stdin -z fails create with too many arguments' '
 test_expect_success 'stdin -z fails update with no ref' '
 	printf $F "update " >stdin &&
 	test_must_fail git update-ref -z --stdin <stdin 2>err &&
-	grep "fatal: update line missing <ref>" err
+	grep "fatal: update: missing <ref>" err
 '
 
-test_expect_success 'stdin -z fails update with bad ref name' '
-	printf $F "update ~a" "$m" >stdin &&
+test_expect_success 'stdin -z fails update with too few args' '
+	printf $F "update $a" "$m" >stdin &&
 	test_must_fail git update-ref -z --stdin <stdin 2>err &&
-	grep "fatal: invalid ref format: ~a" err
+	grep "fatal: update $a: unexpected end of input when reading <oldvalue>" err
+'
+
+test_expect_success 'stdin -z emits warning with empty new value' '
+	git update-ref $a $m &&
+	printf $F "update $a" "" "" >stdin &&
+	git update-ref -z --stdin <stdin 2>err &&
+	grep "warning: update $a: missing <newvalue>, treating as zero" err &&
+	test_must_fail git rev-parse --verify -q $a
 '
 
 test_expect_success 'stdin -z fails update with no new value' '
 	printf $F "update $a" >stdin &&
 	test_must_fail git update-ref -z --stdin <stdin 2>err &&
-	grep "fatal: update $a missing <newvalue>" err
+	grep "fatal: update $a: unexpected end of input when reading <newvalue>" err
 '
 
 test_expect_success 'stdin -z fails update with no old value' '
 	printf $F "update $a" "$m" >stdin &&
 	test_must_fail git update-ref -z --stdin <stdin 2>err &&
-	grep "fatal: update $a missing \\[<oldvalue>\\] NUL" err
+	grep "fatal: update $a: unexpected end of input when reading <oldvalue>" err
 '
 
 test_expect_success 'stdin -z fails update with too many arguments' '
@@ -727,19 +955,13 @@ test_expect_success 'stdin -z fails update with too many arguments' '
 test_expect_success 'stdin -z fails delete with no ref' '
 	printf $F "delete " >stdin &&
 	test_must_fail git update-ref -z --stdin <stdin 2>err &&
-	grep "fatal: delete line missing <ref>" err
-'
-
-test_expect_success 'stdin -z fails delete with bad ref name' '
-	printf $F "delete ~a" "$m" >stdin &&
-	test_must_fail git update-ref -z --stdin <stdin 2>err &&
-	grep "fatal: invalid ref format: ~a" err
+	grep "fatal: delete: missing <ref>" err
 '
 
 test_expect_success 'stdin -z fails delete with no old value' '
 	printf $F "delete $a" >stdin &&
 	test_must_fail git update-ref -z --stdin <stdin 2>err &&
-	grep "fatal: delete $a missing \\[<oldvalue>\\] NUL" err
+	grep "fatal: delete $a: unexpected end of input when reading <oldvalue>" err
 '
 
 test_expect_success 'stdin -z fails delete with too many arguments' '
@@ -757,7 +979,7 @@ test_expect_success 'stdin -z fails verify with too many arguments' '
 test_expect_success 'stdin -z fails verify with no old value' '
 	printf $F "verify $a" >stdin &&
 	test_must_fail git update-ref -z --stdin <stdin 2>err &&
-	grep "fatal: verify $a missing \\[<oldvalue>\\] NUL" err
+	grep "fatal: verify $a: unexpected end of input when reading <oldvalue>" err
 '
 
 test_expect_success 'stdin -z fails option with unknown name' '
@@ -769,7 +991,7 @@ test_expect_success 'stdin -z fails option with unknown name' '
 test_expect_success 'stdin -z fails with duplicate refs' '
 	printf $F "create $a" "$m" "create $b" "$m" "create $a" "$m" >stdin &&
 	test_must_fail git update-ref -z --stdin <stdin 2>err &&
-	grep "fatal: Multiple updates for ref '"'"'$a'"'"' not allowed." err
+	grep "fatal: multiple updates for ref '"'"'$a'"'"' not allowed." err
 '
 
 test_expect_success 'stdin -z create ref works' '
@@ -809,28 +1031,39 @@ test_expect_success 'stdin -z create ref works with path with space to blob' '
 test_expect_success 'stdin -z update ref fails with wrong old value' '
 	printf $F "update $c" "$m" "$m~1" >stdin &&
 	test_must_fail git update-ref -z --stdin <stdin 2>err &&
-	grep "fatal: Cannot lock the ref '"'"'$c'"'"'" err &&
+	grep "fatal: cannot lock ref '"'"'$c'"'"'" err &&
 	test_must_fail git rev-parse --verify -q $c
 '
 
 test_expect_success 'stdin -z update ref fails with bad old value' '
 	printf $F "update $c" "$m" "does-not-exist" >stdin &&
 	test_must_fail git update-ref -z --stdin <stdin 2>err &&
-	grep "fatal: invalid old value for ref $c: does-not-exist" err &&
+	grep "fatal: update $c: invalid <oldvalue>: does-not-exist" err &&
 	test_must_fail git rev-parse --verify -q $c
+'
+
+test_expect_success 'stdin -z create ref fails when ref exists' '
+	git update-ref $c $m &&
+	git rev-parse "$c" >expect &&
+	printf $F "create $c" "$m~1" >stdin &&
+	test_must_fail git update-ref -z --stdin <stdin 2>err &&
+	grep "fatal: cannot lock ref '"'"'$c'"'"'" err &&
+	git rev-parse "$c" >actual &&
+	test_cmp expect actual
 '
 
 test_expect_success 'stdin -z create ref fails with bad new value' '
+	git update-ref -d "$c" &&
 	printf $F "create $c" "does-not-exist" >stdin &&
 	test_must_fail git update-ref -z --stdin <stdin 2>err &&
-	grep "fatal: invalid new value for ref $c: does-not-exist" err &&
+	grep "fatal: create $c: invalid <newvalue>: does-not-exist" err &&
 	test_must_fail git rev-parse --verify -q $c
 '
 
-test_expect_success 'stdin -z create ref fails with zero new value' '
+test_expect_success 'stdin -z create ref fails with empty new value' '
 	printf $F "create $c" "" >stdin &&
 	test_must_fail git update-ref -z --stdin <stdin 2>err &&
-	grep "fatal: create $c given zero new value" err &&
+	grep "fatal: create $c: missing <newvalue>" err &&
 	test_must_fail git rev-parse --verify -q $c
 '
 
@@ -845,7 +1078,7 @@ test_expect_success 'stdin -z update ref works with right old value' '
 test_expect_success 'stdin -z delete ref fails with wrong old value' '
 	printf $F "delete $a" "$m~1" >stdin &&
 	test_must_fail git update-ref -z --stdin <stdin 2>err &&
-	grep "fatal: Cannot lock the ref '"'"'$a'"'"'" err &&
+	grep "fatal: cannot lock ref '"'"'$a'"'"'" err &&
 	git rev-parse $m >expect &&
 	git rev-parse $a >actual &&
 	test_cmp expect actual
@@ -854,7 +1087,7 @@ test_expect_success 'stdin -z delete ref fails with wrong old value' '
 test_expect_success 'stdin -z delete ref fails with zero old value' '
 	printf $F "delete $a" "$Z" >stdin &&
 	test_must_fail git update-ref -z --stdin <stdin 2>err &&
-	grep "fatal: delete $a given zero old value" err &&
+	grep "fatal: delete $a: zero <oldvalue>" err &&
 	git rev-parse $m >expect &&
 	git rev-parse $a >actual &&
 	test_cmp expect actual
@@ -899,6 +1132,52 @@ test_expect_success 'stdin -z update/create/verify combination works' '
 	test_must_fail git rev-parse --verify -q $c
 '
 
+test_expect_success 'stdin -z verify succeeds for correct value' '
+	git rev-parse $m >expect &&
+	printf $F "verify $m" "$m" >stdin &&
+	git update-ref -z --stdin <stdin &&
+	git rev-parse $m >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'stdin -z verify succeeds for missing reference' '
+	printf $F "verify refs/heads/missing" "$Z" >stdin &&
+	git update-ref -z --stdin <stdin &&
+	test_must_fail git rev-parse --verify -q refs/heads/missing
+'
+
+test_expect_success 'stdin -z verify treats no value as missing' '
+	printf $F "verify refs/heads/missing" "" >stdin &&
+	git update-ref -z --stdin <stdin &&
+	test_must_fail git rev-parse --verify -q refs/heads/missing
+'
+
+test_expect_success 'stdin -z verify fails for wrong value' '
+	git rev-parse $m >expect &&
+	printf $F "verify $m" "$m~1" >stdin &&
+	test_must_fail git update-ref -z --stdin <stdin &&
+	git rev-parse $m >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'stdin -z verify fails for mistaken null value' '
+	git rev-parse $m >expect &&
+	printf $F "verify $m" "$Z" >stdin &&
+	test_must_fail git update-ref -z --stdin <stdin &&
+	git rev-parse $m >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'stdin -z verify fails for mistaken empty value' '
+	M=$(git rev-parse $m) &&
+	test_when_finished "git update-ref $m $M" &&
+	git rev-parse $m >expect &&
+	printf $F "verify $m" "" >stdin &&
+	test_must_fail git update-ref -z --stdin <stdin &&
+	git rev-parse $m >actual &&
+	test_cmp expect actual
+'
+
 test_expect_success 'stdin -z update refs works with identity updates' '
 	printf $F "update $a" "$m" "$m" "update $b" "$m" "$m" "update $c" "$Z" "" >stdin &&
 	git update-ref -z --stdin <stdin &&
@@ -912,9 +1191,9 @@ test_expect_success 'stdin -z update refs works with identity updates' '
 
 test_expect_success 'stdin -z update refs fails with wrong old value' '
 	git update-ref $c $m &&
-	printf $F "update $a" "$m" "$m" "update $b" "$m" "$m" "update $c" "" "$Z" >stdin &&
+	printf $F "update $a" "$m" "$m" "update $b" "$m" "$m" "update $c" "$m" "$Z" >stdin &&
 	test_must_fail git update-ref -z --stdin <stdin 2>err &&
-	grep "fatal: Cannot lock the ref '"'"'$c'"'"'" err &&
+	grep "fatal: cannot lock ref '"'"'$c'"'"'" err &&
 	git rev-parse $m >expect &&
 	git rev-parse $a >actual &&
 	test_cmp expect actual &&
@@ -932,6 +1211,88 @@ test_expect_success 'stdin -z delete refs works with packed and loose refs' '
 	test_must_fail git rev-parse --verify -q $a &&
 	test_must_fail git rev-parse --verify -q $b &&
 	test_must_fail git rev-parse --verify -q $c
+'
+
+test_expect_success 'fails with duplicate HEAD update' '
+	git branch target1 $A &&
+	git checkout target1 &&
+	cat >stdin <<-EOF &&
+	update refs/heads/target1 $C
+	option no-deref
+	update HEAD $B
+	EOF
+	test_must_fail git update-ref --stdin <stdin 2>err &&
+	grep "fatal: multiple updates for '\''HEAD'\'' (including one via its referent .refs/heads/target1.) are not allowed" err &&
+	echo "refs/heads/target1" >expect &&
+	git symbolic-ref HEAD >actual &&
+	test_cmp expect actual &&
+	echo "$A" >expect &&
+	git rev-parse refs/heads/target1 >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'fails with duplicate ref update via symref' '
+	git branch target2 $A &&
+	git symbolic-ref refs/heads/symref2 refs/heads/target2 &&
+	cat >stdin <<-EOF &&
+	update refs/heads/target2 $C
+	update refs/heads/symref2 $B
+	EOF
+	test_must_fail git update-ref --stdin <stdin 2>err &&
+	grep "fatal: multiple updates for '\''refs/heads/target2'\'' (including one via symref .refs/heads/symref2.) are not allowed" err &&
+	echo "refs/heads/target2" >expect &&
+	git symbolic-ref refs/heads/symref2 >actual &&
+	test_cmp expect actual &&
+	echo "$A" >expect &&
+	git rev-parse refs/heads/target2 >actual &&
+	test_cmp expect actual
+'
+
+run_with_limited_open_files () {
+	(ulimit -n 32 && "$@")
+}
+
+test_lazy_prereq ULIMIT_FILE_DESCRIPTORS 'run_with_limited_open_files true'
+
+test_expect_success ULIMIT_FILE_DESCRIPTORS 'large transaction creating branches does not burst open file limit' '
+(
+	for i in $(test_seq 33)
+	do
+		echo "create refs/heads/$i HEAD"
+	done >large_input &&
+	run_with_limited_open_files git update-ref --stdin <large_input &&
+	git rev-parse --verify -q refs/heads/33
+)
+'
+
+test_expect_success ULIMIT_FILE_DESCRIPTORS 'large transaction deleting branches does not burst open file limit' '
+(
+	for i in $(test_seq 33)
+	do
+		echo "delete refs/heads/$i HEAD"
+	done >large_input &&
+	run_with_limited_open_files git update-ref --stdin <large_input &&
+	test_must_fail git rev-parse --verify -q refs/heads/33
+)
+'
+
+test_expect_success 'handle per-worktree refs in refs/bisect' '
+	git commit --allow-empty -m "initial commit" &&
+	git worktree add -b branch worktree &&
+	(
+		cd worktree &&
+		git commit --allow-empty -m "test commit"  &&
+		git for-each-ref >for-each-ref.out &&
+		! grep refs/bisect for-each-ref.out &&
+		git update-ref refs/bisect/something HEAD &&
+		git rev-parse refs/bisect/something >../worktree-head &&
+		git for-each-ref | grep refs/bisect/something
+	) &&
+	test_path_is_missing .git/refs/bisect &&
+	test_must_fail git rev-parse refs/bisect/something &&
+	git update-ref refs/bisect/something HEAD &&
+	git rev-parse refs/bisect/something >main-head &&
+	! test_cmp main-head worktree-head
 '
 
 test_done

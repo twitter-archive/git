@@ -32,17 +32,17 @@ static int send_request(const char *socket, const struct strbuf *out)
 		write_or_die(1, in, r);
 		got_data = 1;
 	}
+	close(fd);
 	return got_data;
 }
 
 static void spawn_daemon(const char *socket)
 {
-	struct child_process daemon;
+	struct child_process daemon = CHILD_PROCESS_INIT;
 	const char *argv[] = { NULL, NULL, NULL };
 	char buf[128];
 	int r;
 
-	memset(&daemon, 0, sizeof(daemon));
 	argv[0] = "git-credential-cache--daemon";
 	argv[1] = socket;
 	daemon.argv = argv;
@@ -83,13 +83,13 @@ static void do_cache(const char *socket, const char *action, int timeout,
 	strbuf_release(&buf);
 }
 
-int main(int argc, const char **argv)
+int cmd_main(int argc, const char **argv)
 {
 	char *socket_path = NULL;
 	int timeout = 900;
 	const char *op;
 	const char * const usage[] = {
-		"git credential-cache [options] <action>",
+		"git credential-cache [<options>] <action>",
 		NULL
 	};
 	struct option options[] = {

@@ -15,9 +15,12 @@ merge_cmd () {
 			"$LOCAL" "$REMOTE" \
 			"$(basename "$MERGED")"
 	fi
-	status=$?
 }
 
 translate_merge_tool_path() {
 	echo emacs
+}
+
+exit_code_trustable () {
+	true
 }

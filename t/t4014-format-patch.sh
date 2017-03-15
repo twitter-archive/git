@@ -43,7 +43,7 @@ test_expect_success setup '
 test_expect_success "format-patch --ignore-if-in-upstream" '
 
 	git format-patch --stdout master..side >patch0 &&
-	cnt=`grep "^From " patch0 | wc -l` &&
+	cnt=$(grep "^From " patch0 | wc -l) &&
 	test $cnt = 3
 
 '
@@ -52,9 +52,17 @@ test_expect_success "format-patch --ignore-if-in-upstream" '
 
 	git format-patch --stdout \
 		--ignore-if-in-upstream master..side >patch1 &&
-	cnt=`grep "^From " patch1 | wc -l` &&
+	cnt=$(grep "^From " patch1 | wc -l) &&
 	test $cnt = 2
 
+'
+
+test_expect_success "format-patch --ignore-if-in-upstream handles tags" '
+	git tag -a v1 -m tag side &&
+	git tag -a v2 -m tag master &&
+	git format-patch --stdout --ignore-if-in-upstream v2..v1 >patch1 &&
+	cnt=$(grep "^From " patch1 | wc -l) &&
+	test $cnt = 2
 '
 
 test_expect_success "format-patch doesn't consider merge commits" '
@@ -69,7 +77,7 @@ test_expect_success "format-patch doesn't consider merge commits" '
 	git checkout -b merger master &&
 	test_tick &&
 	git merge --no-ff slave &&
-	cnt=`git format-patch -3 --stdout | grep "^From " | wc -l` &&
+	cnt=$(git format-patch -3 --stdout | grep "^From " | wc -l) &&
 	test $cnt = 3
 '
 
@@ -77,7 +85,7 @@ test_expect_success "format-patch result applies" '
 
 	git checkout -b rebuild-0 master &&
 	git am -3 patch0 &&
-	cnt=`git rev-list master.. | wc -l` &&
+	cnt=$(git rev-list master.. | wc -l) &&
 	test $cnt = 2
 '
 
@@ -85,7 +93,7 @@ test_expect_success "format-patch --ignore-if-in-upstream result applies" '
 
 	git checkout -b rebuild-1 master &&
 	git am -3 patch1 &&
-	cnt=`git rev-list master.. | wc -l` &&
+	cnt=$(git rev-list master.. | wc -l) &&
 	test $cnt = 2
 '
 
@@ -220,6 +228,46 @@ check_patch () {
 	grep -e "^Date:" "$1" &&
 	grep -e "^Subject:" "$1"
 }
+
+test_expect_success 'format.from=false' '
+
+	git -c format.from=false format-patch --stdout master..side |
+	sed -e "/^\$/q" >patch &&
+	check_patch patch &&
+	! grep "^From: C O Mitter <committer@example.com>\$" patch
+'
+
+test_expect_success 'format.from=true' '
+
+	git -c format.from=true format-patch --stdout master..side |
+	sed -e "/^\$/q" >patch &&
+	check_patch patch &&
+	grep "^From: C O Mitter <committer@example.com>\$" patch
+'
+
+test_expect_success 'format.from with address' '
+
+	git -c format.from="F R Om <from@example.com>" format-patch --stdout master..side |
+	sed -e "/^\$/q" >patch &&
+	check_patch patch &&
+	grep "^From: F R Om <from@example.com>\$" patch
+'
+
+test_expect_success '--no-from overrides format.from' '
+
+	git -c format.from="F R Om <from@example.com>" format-patch --no-from --stdout master..side |
+	sed -e "/^\$/q" >patch &&
+	check_patch patch &&
+	! grep "^From: F R Om <from@example.com>\$" patch
+'
+
+test_expect_success '--from overrides format.from' '
+
+	git -c format.from="F R Om <from@example.com>" format-patch --from --stdout master..side |
+	sed -e "/^\$/q" >patch &&
+	check_patch patch &&
+	! grep "^From: F R Om <from@example.com>\$" patch
+'
 
 test_expect_success '--no-to overrides config.to' '
 
@@ -541,7 +589,7 @@ test_expect_success 'cover-letter inherits diff options' '
 
 	git mv file foo &&
 	git commit -m foo &&
-	git format-patch --cover-letter -1 &&
+	git format-patch --no-renames --cover-letter -1 &&
 	check_patch 0000-cover-letter.patch &&
 	! grep "file => foo .* 0 *\$" 0000-cover-letter.patch &&
 	git format-patch --cover-letter -1 -M &&
@@ -695,7 +743,7 @@ test_expect_success 'options no longer allowed for format-patch' '
 
 test_expect_success 'format-patch --numstat should produce a patch' '
 	git format-patch --numstat --stdout master..side > output &&
-	test 6 = $(grep "^diff --git a/" output | wc -l)'
+	test 5 = $(grep "^diff --git a/" output | wc -l)'
 
 test_expect_success 'format-patch -- <path>' '
 	git format-patch master..side -- file 2>error &&
@@ -706,9 +754,22 @@ test_expect_success 'format-patch --ignore-if-in-upstream HEAD' '
 	git format-patch --ignore-if-in-upstream HEAD
 '
 
+git_version="$(git --version | sed "s/.* //")"
+
+signature() {
+	printf "%s\n%s\n\n" "-- " "${1:-$git_version}"
+}
+
+test_expect_success 'format-patch default signature' '
+	git format-patch --stdout -1 | tail -n 3 >output &&
+	signature >expect &&
+	test_cmp expect output
+'
+
 test_expect_success 'format-patch --signature' '
-	git format-patch --stdout --signature="my sig" -1 >output &&
-	grep "my sig" output
+	git format-patch --stdout --signature="my sig" -1 | tail -n 3 >output &&
+	signature "my sig" >expect &&
+	test_cmp expect output
 '
 
 test_expect_success 'format-patch with format.signature config' '
@@ -762,24 +823,77 @@ test_expect_success 'format-patch --signature="" suppresses signatures' '
 	! grep "^-- \$" output
 '
 
+test_expect_success 'prepare mail-signature input' '
+	cat >mail-signature <<-\EOF
+
+	Test User <test.email@kernel.org>
+	http://git.kernel.org/cgit/git/git.git
+
+	git.kernel.org/?p=git/git.git;a=summary
+
+	EOF
+'
+
+test_expect_success '--signature-file=file works' '
+	git format-patch --stdout --signature-file=mail-signature -1 >output &&
+	check_patch output &&
+	sed -e "1,/^-- \$/d" <output >actual &&
+	{
+		cat mail-signature && echo
+	} >expect &&
+	test_cmp expect actual
+'
+
+test_expect_success 'format.signaturefile works' '
+	test_config format.signaturefile mail-signature &&
+	git format-patch --stdout -1 >output &&
+	check_patch output &&
+	sed -e "1,/^-- \$/d" <output >actual &&
+	{
+		cat mail-signature && echo
+	} >expect &&
+	test_cmp expect actual
+'
+
+test_expect_success '--no-signature suppresses format.signaturefile ' '
+	test_config format.signaturefile mail-signature &&
+	git format-patch --stdout --no-signature -1 >output &&
+	check_patch output &&
+	! grep "^-- \$" output
+'
+
+test_expect_success '--signature-file overrides format.signaturefile' '
+	cat >other-mail-signature <<-\EOF &&
+	Use this other signature instead of mail-signature.
+	EOF
+	test_config format.signaturefile mail-signature &&
+	git format-patch --stdout \
+			--signature-file=other-mail-signature -1 >output &&
+	check_patch output &&
+	sed -e "1,/^-- \$/d" <output >actual &&
+	{
+		cat other-mail-signature && echo
+	} >expect &&
+	test_cmp expect actual
+'
+
+test_expect_success '--signature overrides format.signaturefile' '
+	test_config format.signaturefile mail-signature &&
+	git format-patch --stdout --signature="my sig" -1 >output &&
+	check_patch output &&
+	grep "my sig" output
+'
+
 test_expect_success TTY 'format-patch --stdout paginates' '
 	rm -f pager_used &&
-	(
-		GIT_PAGER="wc >pager_used" &&
-		export GIT_PAGER &&
-		test_terminal git format-patch --stdout --all
-	) &&
+	test_terminal env GIT_PAGER="wc >pager_used" git format-patch --stdout --all &&
 	test_path_is_file pager_used
 '
 
  test_expect_success TTY 'format-patch --stdout pagination can be disabled' '
 	rm -f pager_used &&
-	(
-		GIT_PAGER="wc >pager_used" &&
-		export GIT_PAGER &&
-		test_terminal git --no-pager format-patch --stdout --all &&
-		test_terminal git -c "pager.format-patch=false" format-patch --stdout --all
-	) &&
+	test_terminal env GIT_PAGER="wc >pager_used" git --no-pager format-patch --stdout --all &&
+	test_terminal env GIT_PAGER="wc >pager_used" git -c "pager.format-patch=false" format-patch --stdout --all &&
 	test_path_is_missing pager_used &&
 	test_path_is_missing .git/pager_used
 '
@@ -972,6 +1086,15 @@ test_expect_success 'empty subject prefix does not have extra space' '
 	test_cmp expect actual
 '
 
+test_expect_success '--rfc' '
+	cat >expect <<-\EOF &&
+	Subject: [RFC PATCH 1/1] header with . in it
+	EOF
+	git format-patch -n -1 --stdout --rfc >patch &&
+	grep ^Subject: patch >actual &&
+	test_cmp expect actual
+'
+
 test_expect_success '--from=ident notices bogus ident' '
 	test_must_fail git format-patch -1 --stdout --from=foo >patch
 '
@@ -1011,7 +1134,7 @@ test_expect_success '--from omits redundant in-body header' '
 '
 
 test_expect_success 'in-body headers trigger content encoding' '
-	GIT_AUTHOR_NAME="éxötìc" test_commit exotic &&
+	test_env GIT_AUTHOR_NAME="éxötìc" test_commit exotic &&
 	test_when_finished "git reset --hard HEAD^" &&
 	git format-patch -1 --stdout --from >patch &&
 	cat >expect <<-\EOF &&
@@ -1171,8 +1294,7 @@ EOF
 4:Subject: [PATCH] subject
 8:
 10:Signed-off-by: example happens to be wrapped here.
-11:
-12:Signed-off-by: C O Mitter <committer@example.com>
+11:Signed-off-by: C O Mitter <committer@example.com>
 EOF
 	test_cmp expected actual
 '
@@ -1245,7 +1367,7 @@ EOF
 	test_cmp expected actual
 '
 
-test_expect_success 'signoff: detect garbage in non-conforming footer' '
+test_expect_success 'signoff: tolerate garbage in conforming footer' '
 	append_signoff <<\EOF >actual &&
 subject
 
@@ -1260,8 +1382,36 @@ EOF
 8:
 10:
 13:Signed-off-by: C O Mitter <committer@example.com>
-14:
-15:Signed-off-by: C O Mitter <committer@example.com>
+EOF
+	test_cmp expected actual
+'
+
+test_expect_success 'signoff: respect trailer config' '
+	append_signoff <<\EOF >actual &&
+subject
+
+Myfooter: x
+Some Trash
+EOF
+	cat >expected <<\EOF &&
+4:Subject: [PATCH] subject
+8:
+11:
+12:Signed-off-by: C O Mitter <committer@example.com>
+EOF
+	test_cmp expected actual &&
+
+	test_config trailer.Myfooter.ifexists add &&
+	append_signoff <<\EOF >actual &&
+subject
+
+Myfooter: x
+Some Trash
+EOF
+	cat >expected <<\EOF &&
+4:Subject: [PATCH] subject
+8:
+11:Signed-off-by: C O Mitter <committer@example.com>
 EOF
 	test_cmp expected actual
 '
@@ -1368,6 +1518,189 @@ test_expect_success 'cover letter auto user override' '
 	test_line_count = 1 list &&
 	git format-patch -o tmp --no-cover-letter -2 >list &&
 	test_line_count = 2 list
+'
+
+test_expect_success 'format-patch --zero-commit' '
+	git format-patch --zero-commit --stdout v2..v1 >patch2 &&
+	grep "^From " patch2 | sort | uniq >actual &&
+	echo "From $_z40 Mon Sep 17 00:00:00 2001" >expect &&
+	test_cmp expect actual
+'
+
+test_expect_success 'From line has expected format' '
+	git format-patch --stdout v2..v1 >patch2 &&
+	grep "^From " patch2 >from &&
+	grep "^From $_x40 Mon Sep 17 00:00:00 2001$" patch2 >filtered &&
+	test_cmp from filtered
+'
+
+test_expect_success 'format-patch format.outputDirectory option' '
+	test_config format.outputDirectory patches &&
+	rm -fr patches &&
+	git format-patch master..side &&
+	test $(git rev-list master..side | wc -l) -eq $(ls patches | wc -l)
+'
+
+test_expect_success 'format-patch -o overrides format.outputDirectory' '
+	test_config format.outputDirectory patches &&
+	rm -fr patches patchset &&
+	git format-patch master..side -o patchset &&
+	test_path_is_missing patches &&
+	test_path_is_dir patchset
+'
+
+test_expect_success 'format-patch --base' '
+	git checkout side &&
+	git format-patch --stdout --base=HEAD~3 -1 | tail -n 7 >actual &&
+	echo >expected &&
+	echo "base-commit: $(git rev-parse HEAD~3)" >>expected &&
+	echo "prerequisite-patch-id: $(git show --patch HEAD~2 | git patch-id --stable | awk "{print \$1}")" >>expected &&
+	echo "prerequisite-patch-id: $(git show --patch HEAD~1 | git patch-id --stable | awk "{print \$1}")" >>expected &&
+	signature >> expected &&
+	test_cmp expected actual
+'
+
+test_expect_success 'format-patch --base errors out when base commit is in revision list' '
+	test_must_fail git format-patch --base=HEAD -2 &&
+	test_must_fail git format-patch --base=HEAD~1 -2 &&
+	git format-patch --stdout --base=HEAD~2 -2 >patch &&
+	grep "^base-commit:" patch >actual &&
+	echo "base-commit: $(git rev-parse HEAD~2)" >expected &&
+	test_cmp expected actual
+'
+
+test_expect_success 'format-patch --base errors out when base commit is not ancestor of revision list' '
+	# For history as below:
+	#
+	#    ---Q---P---Z---Y---*---X
+	#	 \             /
+	#	  ------------W
+	#
+	# If "format-patch Z..X" is given, P and Z can not be specified as the base commit
+	git checkout -b topic1 master &&
+	git rev-parse HEAD >commit-id-base &&
+	test_commit P &&
+	git rev-parse HEAD >commit-id-P &&
+	test_commit Z &&
+	git rev-parse HEAD >commit-id-Z &&
+	test_commit Y &&
+	git checkout -b topic2 master &&
+	test_commit W &&
+	git merge topic1 &&
+	test_commit X &&
+	test_must_fail git format-patch --base=$(cat commit-id-P) -3 &&
+	test_must_fail git format-patch --base=$(cat commit-id-Z) -3 &&
+	git format-patch --stdout --base=$(cat commit-id-base) -3 >patch &&
+	grep "^base-commit:" patch >actual &&
+	echo "base-commit: $(cat commit-id-base)" >expected &&
+	test_cmp expected actual
+'
+
+test_expect_success 'format-patch --base=auto' '
+	git checkout -b upstream master &&
+	git checkout -b local upstream &&
+	git branch --set-upstream-to=upstream &&
+	test_commit N1 &&
+	test_commit N2 &&
+	git format-patch --stdout --base=auto -2 >patch &&
+	grep "^base-commit:" patch >actual &&
+	echo "base-commit: $(git rev-parse upstream)" >expected &&
+	test_cmp expected actual
+'
+
+test_expect_success 'format-patch errors out when history involves criss-cross' '
+	# setup criss-cross history
+	#
+	#   B---M1---D
+	#  / \ /
+	# A   X
+	#  \ / \
+	#   C---M2---E
+	#
+	git checkout master &&
+	test_commit A &&
+	git checkout -b xb master &&
+	test_commit B &&
+	git checkout -b xc master &&
+	test_commit C &&
+	git checkout -b xbc xb -- &&
+	git merge xc &&
+	git checkout -b xcb xc -- &&
+	git branch --set-upstream-to=xbc &&
+	git merge xb &&
+	git checkout xbc &&
+	test_commit D &&
+	git checkout xcb &&
+	test_commit E &&
+	test_must_fail 	git format-patch --base=auto -1
+'
+
+test_expect_success 'format-patch format.useAutoBaseoption' '
+	test_when_finished "git config --unset format.useAutoBase" &&
+	git checkout local &&
+	git config format.useAutoBase true &&
+	git format-patch --stdout -1 >patch &&
+	grep "^base-commit:" patch >actual &&
+	echo "base-commit: $(git rev-parse upstream)" >expected &&
+	test_cmp expected actual
+'
+
+test_expect_success 'format-patch --base overrides format.useAutoBase' '
+	test_when_finished "git config --unset format.useAutoBase" &&
+	git config format.useAutoBase true &&
+	git format-patch --stdout --base=HEAD~1 -1 >patch &&
+	grep "^base-commit:" patch >actual &&
+	echo "base-commit: $(git rev-parse HEAD~1)" >expected &&
+	test_cmp expected actual
+'
+
+test_expect_success 'format-patch --base with --attach' '
+	git format-patch --attach=mimemime --stdout --base=HEAD~ -1 >patch &&
+	sed -n -e "/^base-commit:/s/.*/1/p" -e "/^---*mimemime--$/s/.*/2/p" \
+		patch >actual &&
+	test_write_lines 1 2 >expect &&
+	test_cmp expect actual
+'
+
+test_expect_success 'format-patch --pretty=mboxrd' '
+	sp=" " &&
+	cat >msg <<-INPUT_END &&
+	mboxrd should escape the body
+
+	From could trip up a loose mbox parser
+	>From extra escape for reversibility
+	>>From extra escape for reversibility 2
+	from lower case not escaped
+	Fromm bad speling not escaped
+	 From with leading space not escaped
+
+	F
+	From
+	From$sp
+	From    $sp
+	From	$sp
+	INPUT_END
+
+	cat >expect <<-INPUT_END &&
+	>From could trip up a loose mbox parser
+	>>From extra escape for reversibility
+	>>>From extra escape for reversibility 2
+	from lower case not escaped
+	Fromm bad speling not escaped
+	 From with leading space not escaped
+
+	F
+	From
+	From
+	From
+	From
+	INPUT_END
+
+	C=$(git commit-tree HEAD^^{tree} -p HEAD <msg) &&
+	git format-patch --pretty=mboxrd --stdout -1 $C~1..$C >patch &&
+	git grep -h --no-index -A11 \
+		"^>From could trip up a loose mbox parser" patch >actual &&
+	test_cmp expect actual
 '
 
 test_done

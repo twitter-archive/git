@@ -14,7 +14,7 @@
 #       specified line.
 #
 #   "<cmd> <lineno>" -- add a line with the specified command
-#       ("squash", "fixup", "edit", or "reword") and the SHA1 taken
+#       ("squash", "fixup", "edit", "reword" or "drop") and the SHA1 taken
 #       from the specified line.
 #
 #   "exec_cmd_with_args" -- add an "exec cmd with args" line.
@@ -29,6 +29,7 @@ set_fake_editor () {
 	*/COMMIT_EDITMSG)
 		test -z "$EXPECT_HEADER_COUNT" ||
 			test "$EXPECT_HEADER_COUNT" = "$(sed -n '1s/^# This is a combination of \(.*\) commits\./\1/p' < "$1")" ||
+			test "# # GETTEXT POISON #" = "$(sed -n '1p' < "$1")" ||
 			exit
 		test -z "$FAKE_COMMIT_MESSAGE" || echo "$FAKE_COMMIT_MESSAGE" > "$1"
 		test -z "$FAKE_COMMIT_AMEND" || echo "$FAKE_COMMIT_AMEND" >> "$1"
@@ -46,7 +47,7 @@ set_fake_editor () {
 	action=pick
 	for line in $FAKE_LINES; do
 		case $line in
-		squash|fixup|edit|reword)
+		squash|fixup|edit|reword|drop)
 			action="$line";;
 		exec*)
 			echo "$line" | sed 's/_/ /g' >> "$1";;
@@ -54,6 +55,11 @@ set_fake_editor () {
 			echo '# comment' >> "$1";;
 		">")
 			echo >> "$1";;
+		bad)
+			action="badcmd";;
+		fakesha)
+			echo "$action XXXXXXX False commit" >> "$1"
+			action=pick;;
 		*)
 			sed -n "${line}s/^pick/$action/p" < "$1".tmp >> "$1"
 			action=pick;;

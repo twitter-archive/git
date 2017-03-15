@@ -96,8 +96,8 @@ test_expect_success 'stash pop after save --include-untracked leaves files untra
 	git stash pop &&
 	git status --porcelain >actual &&
 	test_cmp expect actual &&
-	test "1" = "`cat file2`" &&
-	test untracked = "`cat untracked/untracked`"
+	test "1" = "$(cat file2)" &&
+	test untracked = "$(cat untracked/untracked)"
 '
 
 git clean --force --quiet -d
@@ -183,6 +183,32 @@ test_expect_success 'stash save --all is stash poppable' '
 	test -s ignored &&
 	test -s ignored.d/untracked &&
 	test -s .gitignore
+'
+
+test_expect_success 'stash push --include-untracked with pathspec' '
+	>foo &&
+	>bar &&
+	git stash push --include-untracked -- foo &&
+	test_path_is_file bar &&
+	test_path_is_missing foo &&
+	git stash pop &&
+	test_path_is_file bar &&
+	test_path_is_file foo
+'
+
+test_expect_success 'stash push with $IFS character' '
+	>"foo bar" &&
+	>foo &&
+	>bar &&
+	git add foo* &&
+	git stash push --include-untracked -- "foo b*" &&
+	test_path_is_missing "foo bar" &&
+	test_path_is_file foo &&
+	test_path_is_file bar &&
+	git stash pop &&
+	test_path_is_file "foo bar" &&
+	test_path_is_file foo &&
+	test_path_is_file bar
 '
 
 test_done

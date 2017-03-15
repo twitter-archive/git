@@ -64,7 +64,7 @@ static void note_variables (const char *string);
 static void subst_from_stdin (void);
 
 int
-main (int argc, char *argv[])
+cmd_main (int argc, const char *argv[])
 {
   /* Default values for command line options.  */
   /* unsigned short int show_variables = 0; */
@@ -208,11 +208,8 @@ string_list_append (string_list_ty *slp, const char *s)
   /* Grow the list.  */
   if (slp->nitems >= slp->nitems_max)
     {
-      size_t nbytes;
-
       slp->nitems_max = slp->nitems_max * 2 + 4;
-      nbytes = slp->nitems_max * sizeof (slp->item[0]);
-      slp->item = (const char **) xrealloc (slp->item, nbytes);
+      REALLOC_ARRAY(slp->item, slp->nitems_max);
     }
 
   /* Add the string to the end of the list.  */
@@ -233,20 +230,7 @@ cmp_string (const void *pstr1, const void *pstr2)
 static inline void
 string_list_sort (string_list_ty *slp)
 {
-  if (slp->nitems > 0)
-    qsort (slp->item, slp->nitems, sizeof (slp->item[0]), cmp_string);
-}
-
-/* Test whether a string list contains a given string.  */
-static inline int
-string_list_member (const string_list_ty *slp, const char *s)
-{
-  size_t j;
-
-  for (j = 0; j < slp->nitems; ++j)
-    if (strcmp (slp->item[j], s) == 0)
-      return 1;
-  return 0;
+  QSORT(slp->item, slp->nitems, cmp_string);
 }
 
 /* Test whether a sorted string list contains a given string.  */
@@ -290,9 +274,7 @@ static string_list_ty variables_set;
 static void
 note_variable (const char *var_ptr, size_t var_len)
 {
-  char *string = xmalloc (var_len + 1);
-  memcpy (string, var_ptr, var_len);
-  string[var_len] = '\0';
+  char *string = xmemdupz (var_ptr, var_len);
 
   string_list_append (&variables_set, string);
 }

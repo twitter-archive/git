@@ -163,7 +163,7 @@ test_expect_success 'setup submodule' '
 		git add file &&
 		git commit -m sub_initial
 	) &&
-	git submodule add "`pwd`/sub" sub &&
+	git submodule add "$(pwd)/sub" sub &&
 	git commit -m initial &&
 	test_tick &&
 	(
@@ -377,7 +377,7 @@ test_expect_success 'full-tree re-shows unmodified files'        '
 
 test_expect_success 'set-up a few more tags for tag export tests' '
 	git checkout -f master &&
-	HEAD_TREE=`git show -s --pretty=raw HEAD | grep tree | sed "s/tree //"` &&
+	HEAD_TREE=$(git show -s --pretty=raw HEAD | grep tree | sed "s/tree //") &&
 	git tag    tree_tag        -m "tagging a tree" $HEAD_TREE &&
 	git tag -a tree_tag-obj    -m "tagging a tree" $HEAD_TREE &&
 	git tag    tag-obj_tag     -m "tagging a tag" tree_tag-obj &&
@@ -422,7 +422,7 @@ test_expect_success 'directory becomes symlink'        '
 test_expect_success 'fast-export quotes pathnames' '
 	git init crazy-paths &&
 	(cd crazy-paths &&
-	 blob=`echo foo | git hash-object -w --stdin` &&
+	 blob=$(echo foo | git hash-object -w --stdin) &&
 	 git update-index --add \
 		--cacheinfo 100644 $blob "$(printf "path with\\nnewline")" \
 		--cacheinfo 100644 $blob "path with \"quote\"" \
@@ -501,6 +501,24 @@ test_expect_success 'refs are updated even if no commits need to be exported' '
 		--export-marks=tmp-marks master > /dev/null &&
 	git fast-export --import-marks=tmp-marks \
 		--export-marks=tmp-marks master > actual &&
+	test_cmp expected actual
+'
+
+test_expect_success 'use refspec' '
+	git fast-export --refspec refs/heads/master:refs/heads/foobar master | \
+		grep "^commit " | sort | uniq > actual &&
+	echo "commit refs/heads/foobar" > expected &&
+	test_cmp expected actual
+'
+
+test_expect_success 'delete refspec' '
+	git branch to-delete &&
+	git fast-export --refspec :refs/heads/to-delete to-delete ^to-delete > actual &&
+	cat > expected <<-EOF &&
+	reset refs/heads/to-delete
+	from 0000000000000000000000000000000000000000
+
+	EOF
 	test_cmp expected actual
 '
 

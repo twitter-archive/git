@@ -6,7 +6,7 @@ test_description='basic credential helper tests'
 
 test_expect_success 'setup helper scripts' '
 	cat >dump <<-\EOF &&
-	whoami=`echo $0 | sed s/.*git-credential-//`
+	whoami=$(echo $0 | sed s/.*git-credential-//)
 	echo >&2 "$whoami: $*"
 	OIFS=$IFS
 	IFS==
@@ -286,6 +286,26 @@ test_expect_success 'http paths can be part of context' '
 	verbatim: protocol=https
 	verbatim: host=example.com
 	verbatim: path=foo.git
+	EOF
+'
+
+test_expect_success 'helpers can abort the process' '
+	test_must_fail git \
+		-c credential.helper="!f() { echo quit=1; }; f" \
+		-c credential.helper="verbatim foo bar" \
+		credential fill >stdout &&
+	>expect &&
+	test_cmp expect stdout
+'
+
+test_expect_success 'empty helper spec resets helper list' '
+	test_config credential.helper "verbatim file file" &&
+	check fill "" "verbatim cmdline cmdline" <<-\EOF
+	--
+	username=cmdline
+	password=cmdline
+	--
+	verbatim: get
 	EOF
 '
 

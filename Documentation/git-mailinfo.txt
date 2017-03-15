@@ -66,6 +66,11 @@ conversion, even with this flag.
 -n::
 	Disable all charset re-coding of the metadata.
 
+-m::
+--message-id::
+	Copy the Message-ID header at the end of the commit message.  This
+	is useful in order to associate commits with mailing list discussions.
+
 --scissors::
 	Remove everything in body before a scissors line.  A line that
 	mainly consists of scissors (either ">8" or "8<") and perforation
@@ -80,7 +85,7 @@ with comments and suggestions on the message you are responding to, and to
 conclude it with a patch submission, separating the discussion and the
 beginning of the proposed commit log message with a scissors line.
 +
-This can enabled by default with the configuration option mailinfo.scissors.
+This can be enabled by default with the configuration option mailinfo.scissors.
 
 --no-scissors::
 	Ignore scissors lines. Useful for overriding mailinfo.scissors settings.

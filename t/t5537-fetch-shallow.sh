@@ -98,7 +98,7 @@ EOF
 test_expect_success 'fetch something upstream has but hidden by clients shallow boundaries' '
 	# the blob "1" is available in .git but hidden by the
 	# shallow2/.git/shallow and it should be resent
-	! git --git-dir=shallow2/.git cat-file blob `echo 1|git hash-object --stdin` >/dev/null &&
+	! git --git-dir=shallow2/.git cat-file blob $(echo 1|git hash-object --stdin) >/dev/null &&
 	echo 1 >1.t &&
 	git add 1.t &&
 	git commit -m add-1-back &&
@@ -114,7 +114,7 @@ add-1-back
 EOF
 	test_cmp expect actual
 	) &&
-	git --git-dir=shallow2/.git cat-file blob `echo 1|git hash-object --stdin` >/dev/null
+	git --git-dir=shallow2/.git cat-file blob $(echo 1|git hash-object --stdin) >/dev/null
 
 '
 
@@ -171,6 +171,19 @@ EOF
 EOF
 	test_cmp expect actual
 	)
+'
+
+test_expect_success POSIXPERM,SANITY 'shallow fetch from a read-only repo' '
+	cp -R .git read-only.git &&
+	find read-only.git -print | xargs chmod -w &&
+	test_when_finished "find read-only.git -type d -print | xargs chmod +w" &&
+	git clone --no-local --depth=2 read-only.git from-read-only &&
+	git --git-dir=from-read-only/.git log --format=%s >actual &&
+	cat >expect <<EOF &&
+add-1-back
+4
+EOF
+	test_cmp expect actual
 '
 
 test_done

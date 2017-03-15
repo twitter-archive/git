@@ -11,7 +11,7 @@ test_description='Same rename detection as t4003 but testing diff-raw -z.
 
 test_expect_success \
     'prepare reference tree' \
-    'cat "$TEST_DIRECTORY"/../COPYING >COPYING &&
+    'cat "$TEST_DIRECTORY"/diff-lib/COPYING >COPYING &&
      echo frotz >rezrov &&
     git update-index --add COPYING rezrov &&
     tree=$(git write-tree) &&
@@ -73,12 +73,12 @@ test_expect_success \
 
 # tree has COPYING and rezrov.  work tree has the same COPYING and
 # copy-edited COPYING.1, and unchanged rezrov.  We should not say
-# anything about rezrov nor COPYING, since the revised again diff-raw
+# anything about rezrov or COPYING, since the revised again diff-raw
 # nows how to say Copy.
 
 test_expect_success \
     'prepare work tree once again' \
-    'cat "$TEST_DIRECTORY"/../COPYING >COPYING &&
+    'cat "$TEST_DIRECTORY"/diff-lib/COPYING >COPYING &&
      git update-index --add --remove COPYING COPYING.1'
 
 git diff-index -z -C --find-copies-harder $tree >current

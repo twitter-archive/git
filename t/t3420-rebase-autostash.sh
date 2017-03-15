@@ -37,6 +37,16 @@ testrebase() {
 	type=$1
 	dotest=$2
 
+	test_expect_success "rebase$type: dirty worktree, --no-autostash" '
+		test_config rebase.autostash true &&
+		git reset --hard &&
+		git checkout -b rebased-feature-branch feature-branch &&
+		test_when_finished git branch -D rebased-feature-branch &&
+		test_when_finished git checkout feature-branch &&
+		echo dirty >>file3 &&
+		test_must_fail git rebase$type --no-autostash unrelated-onto-branch
+	'
+
 	test_expect_success "rebase$type: dirty worktree, non-conflicting rebase" '
 		test_config rebase.autostash true &&
 		git reset --hard &&
@@ -166,5 +176,51 @@ test_expect_success "rebase: noop rebase" '
 testrebase "" .git/rebase-apply
 testrebase " --merge" .git/rebase-merge
 testrebase " --interactive" .git/rebase-merge
+
+test_expect_success 'abort rebase -i with --autostash' '
+	test_when_finished "git reset --hard" &&
+	echo uncommitted-content >file0 &&
+	(
+		write_script abort-editor.sh <<-\EOF &&
+			echo >"$1"
+		EOF
+		test_set_editor "$(pwd)/abort-editor.sh" &&
+		test_must_fail git rebase -i --autostash HEAD^ &&
+		rm -f abort-editor.sh
+	) &&
+	echo uncommitted-content >expected &&
+	test_cmp expected file0
+'
+
+test_expect_success 'restore autostash on editor failure' '
+	test_when_finished "git reset --hard" &&
+	echo uncommitted-content >file0 &&
+	(
+		test_set_editor "false" &&
+		test_must_fail git rebase -i --autostash HEAD^
+	) &&
+	echo uncommitted-content >expected &&
+	test_cmp expected file0
+'
+
+test_expect_success 'autostash is saved on editor failure with conflict' '
+	test_when_finished "git reset --hard" &&
+	echo uncommitted-content >file0 &&
+	(
+		write_script abort-editor.sh <<-\EOF &&
+			echo conflicting-content >file0
+			exit 1
+		EOF
+		test_set_editor "$(pwd)/abort-editor.sh" &&
+		test_must_fail git rebase -i --autostash HEAD^ &&
+		rm -f abort-editor.sh
+	) &&
+	echo conflicting-content >expected &&
+	test_cmp expected file0 &&
+	git checkout file0 &&
+	git stash pop &&
+	echo uncommitted-content >expected &&
+	test_cmp expected file0
+'
 
 test_done

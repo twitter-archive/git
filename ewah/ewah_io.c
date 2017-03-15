@@ -19,6 +19,7 @@
  */
 #include "git-compat-util.h"
 #include "ewok.h"
+#include "strbuf.h"
 
 int ewah_serialize_native(struct ewah_bitmap *self, int fd)
 {
@@ -110,9 +111,21 @@ int ewah_serialize(struct ewah_bitmap *self, int fd)
 	return ewah_serialize_to(self, write_helper, (void *)(intptr_t)fd);
 }
 
-int ewah_read_mmap(struct ewah_bitmap *self, void *map, size_t len)
+static int write_strbuf(void *user_data, const void *data, size_t len)
 {
-	uint8_t *ptr = map;
+	struct strbuf *sb = user_data;
+	strbuf_add(sb, data, len);
+	return len;
+}
+
+int ewah_serialize_strbuf(struct ewah_bitmap *self, struct strbuf *sb)
+{
+	return ewah_serialize_to(self, write_strbuf, sb);
+}
+
+int ewah_read_mmap(struct ewah_bitmap *self, const void *map, size_t len)
+{
+	const uint8_t *ptr = map;
 	size_t i;
 
 	self->bit_size = get_be32(ptr);
@@ -121,11 +134,7 @@ int ewah_read_mmap(struct ewah_bitmap *self, void *map, size_t len)
 	self->buffer_size = self->alloc_size = get_be32(ptr);
 	ptr += sizeof(uint32_t);
 
-	self->buffer = ewah_realloc(self->buffer,
-		self->alloc_size * sizeof(eword_t));
-
-	if (!self->buffer)
-		return -1;
+	REALLOC_ARRAY(self->buffer, self->alloc_size);
 
 	/*
 	 * Copy the raw data for the bitmap as a whole chunk;
@@ -133,8 +142,8 @@ int ewah_read_mmap(struct ewah_bitmap *self, void *map, size_t len)
 	 * the endianness conversion in a separate pass to ensure
 	 * we're loading 8-byte aligned words.
 	 */
-	memcpy(self->buffer, ptr, self->buffer_size * sizeof(uint64_t));
-	ptr += self->buffer_size * sizeof(uint64_t);
+	memcpy(self->buffer, ptr, self->buffer_size * sizeof(eword_t));
+	ptr += self->buffer_size * sizeof(eword_t);
 
 	for (i = 0; i < self->buffer_size; ++i)
 		self->buffer[i] = ntohll(self->buffer[i]);
@@ -167,11 +176,7 @@ int ewah_deserialize(struct ewah_bitmap *self, int fd)
 		return -1;
 
 	self->buffer_size = self->alloc_size = (size_t)ntohl(word_count);
-	self->buffer = ewah_realloc(self->buffer,
-		self->alloc_size * sizeof(eword_t));
-
-	if (!self->buffer)
-		return -1;
+	REALLOC_ARRAY(self->buffer, self->alloc_size);
 
 	/** 64 bit x N -- compressed words */
 	buffer = self->buffer;

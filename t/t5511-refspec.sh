@@ -5,7 +5,6 @@ test_description='refspec parsing'
 . ./test-lib.sh
 
 test_refspec () {
-
 	kind=$1 refspec=$2 expect=$3
 	git config remote.frotz.url "." &&
 	git config --remove-section remote.frotz &&
@@ -72,16 +71,24 @@ test_refspec fetch ':refs/remotes/frotz/HEAD-to-me'
 test_refspec push ':refs/remotes/frotz/delete me'		invalid
 test_refspec fetch ':refs/remotes/frotz/HEAD to me'		invalid
 
-test_refspec fetch 'refs/heads/*/for-linus:refs/remotes/mine/*-blah' invalid
-test_refspec push 'refs/heads/*/for-linus:refs/remotes/mine/*-blah' invalid
+test_refspec fetch 'refs/heads/*/for-linus:refs/remotes/mine/*-blah'
+test_refspec push 'refs/heads/*/for-linus:refs/remotes/mine/*-blah'
 
-test_refspec fetch 'refs/heads*/for-linus:refs/remotes/mine/*' invalid
-test_refspec push 'refs/heads*/for-linus:refs/remotes/mine/*' invalid
+test_refspec fetch 'refs/heads*/for-linus:refs/remotes/mine/*'
+test_refspec push 'refs/heads*/for-linus:refs/remotes/mine/*'
 
 test_refspec fetch 'refs/heads/*/*/for-linus:refs/remotes/mine/*' invalid
 test_refspec push 'refs/heads/*/*/for-linus:refs/remotes/mine/*' invalid
 
+test_refspec fetch 'refs/heads/*g*/for-linus:refs/remotes/mine/*' invalid
+test_refspec push 'refs/heads/*g*/for-linus:refs/remotes/mine/*' invalid
+
 test_refspec fetch 'refs/heads/*/for-linus:refs/remotes/mine/*'
 test_refspec push 'refs/heads/*/for-linus:refs/remotes/mine/*'
+
+good=$(printf '\303\204')
+test_refspec fetch "refs/heads/${good}"
+bad=$(printf '\011tab')
+test_refspec fetch "refs/heads/${bad}"				invalid
 
 test_done

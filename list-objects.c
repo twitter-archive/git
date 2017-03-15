@@ -11,11 +11,12 @@
 static void process_blob(struct rev_info *revs,
 			 struct blob *blob,
 			 show_object_fn show,
-			 struct name_path *path,
+			 struct strbuf *path,
 			 const char *name,
 			 void *cb_data)
 {
 	struct object *obj = &blob->object;
+	size_t pathlen;
 
 	if (!revs->blob_objects)
 		return;
@@ -24,7 +25,11 @@ static void process_blob(struct rev_info *revs,
 	if (obj->flags & (UNINTERESTING | SEEN))
 		return;
 	obj->flags |= SEEN;
-	show(obj, path, name, cb_data);
+
+	pathlen = path->len;
+	strbuf_addstr(path, name);
+	show(obj, path->buf, cb_data);
+	strbuf_setlen(path, pathlen);
 }
 
 /*
@@ -52,7 +57,7 @@ static void process_blob(struct rev_info *revs,
 static void process_gitlink(struct rev_info *revs,
 			    const unsigned char *sha1,
 			    show_object_fn show,
-			    struct name_path *path,
+			    struct strbuf *path,
 			    const char *name,
 			    void *cb_data)
 {
@@ -62,7 +67,6 @@ static void process_gitlink(struct rev_info *revs,
 static void process_tree(struct rev_info *revs,
 			 struct tree *tree,
 			 show_object_fn show,
-			 struct name_path *path,
 			 struct strbuf *base,
 			 const char *name,
 			 void *cb_data)
@@ -70,7 +74,6 @@ static void process_tree(struct rev_info *revs,
 	struct object *obj = &tree->object;
 	struct tree_desc desc;
 	struct name_entry entry;
-	struct name_path me;
 	enum interesting match = revs->diffopt.pathspec.nr == 0 ?
 		all_entries_interesting: entry_not_interesting;
 	int baselen = base->len;
@@ -81,19 +84,17 @@ static void process_tree(struct rev_info *revs,
 		die("bad tree object");
 	if (obj->flags & (UNINTERESTING | SEEN))
 		return;
-	if (parse_tree(tree) < 0)
-		die("bad tree object %s", sha1_to_hex(obj->sha1));
-	obj->flags |= SEEN;
-	show(obj, path, name, cb_data);
-	me.up = path;
-	me.elem = name;
-	me.elem_len = strlen(name);
-
-	if (!match) {
-		strbuf_addstr(base, name);
-		if (base->len)
-			strbuf_addch(base, '/');
+	if (parse_tree_gently(tree, revs->ignore_missing_links) < 0) {
+		if (revs->ignore_missing_links)
+			return;
+		die("bad tree object %s", oid_to_hex(&obj->oid));
 	}
+
+	obj->flags |= SEEN;
+	strbuf_addstr(base, name);
+	show(obj, base->buf, cb_data);
+	if (base->len)
+		strbuf_addch(base, '/');
 
 	init_tree_desc(&desc, tree->buffer, tree->size);
 
@@ -109,17 +110,17 @@ static void process_tree(struct rev_info *revs,
 
 		if (S_ISDIR(entry.mode))
 			process_tree(revs,
-				     lookup_tree(entry.sha1),
-				     show, &me, base, entry.path,
+				     lookup_tree(entry.oid->hash),
+				     show, base, entry.path,
 				     cb_data);
 		else if (S_ISGITLINK(entry.mode))
-			process_gitlink(revs, entry.sha1,
-					show, &me, entry.path,
+			process_gitlink(revs, entry.oid->hash,
+					show, base, entry.path,
 					cb_data);
 		else
 			process_blob(revs,
-				     lookup_blob(entry.sha1),
-				     show, &me, entry.path,
+				     lookup_blob(entry.oid->hash),
+				     show, base, entry.path,
 				     cb_data);
 	}
 	strbuf_setlen(base, baselen);
@@ -154,7 +155,7 @@ void mark_edges_uninteresting(struct rev_info *revs, show_edge_fn show_edge)
 
 		if (commit->object.flags & UNINTERESTING) {
 			mark_tree_uninteresting(commit->tree);
-			if (revs->edge_hint && !(commit->object.flags & SHOWN)) {
+			if (revs->edge_hint_aggressive && !(commit->object.flags & SHOWN)) {
 				commit->object.flags |= SHOWN;
 				show_edge(commit);
 			}
@@ -162,7 +163,7 @@ void mark_edges_uninteresting(struct rev_info *revs, show_edge_fn show_edge)
 		}
 		mark_edge_parents_uninteresting(commit, revs, show_edge);
 	}
-	if (revs->edge_hint) {
+	if (revs->edge_hint_aggressive) {
 		for (i = 0; i < revs->cmdline.nr; i++) {
 			struct object *obj = revs->cmdline.rev[i].item;
 			struct commit *commit = (struct commit *)obj;
@@ -205,31 +206,29 @@ void traverse_commit_list(struct rev_info *revs,
 		struct object_array_entry *pending = revs->pending.objects + i;
 		struct object *obj = pending->item;
 		const char *name = pending->name;
+		const char *path = pending->path;
 		if (obj->flags & (UNINTERESTING | SEEN))
 			continue;
 		if (obj->type == OBJ_TAG) {
 			obj->flags |= SEEN;
-			show_object(obj, NULL, name, data);
+			show_object(obj, name, data);
 			continue;
 		}
+		if (!path)
+			path = "";
 		if (obj->type == OBJ_TREE) {
 			process_tree(revs, (struct tree *)obj, show_object,
-				     NULL, &base, name, data);
+				     &base, path, data);
 			continue;
 		}
 		if (obj->type == OBJ_BLOB) {
 			process_blob(revs, (struct blob *)obj, show_object,
-				     NULL, name, data);
+				     &base, path, data);
 			continue;
 		}
 		die("unknown pending object %s (%s)",
-		    sha1_to_hex(obj->sha1), name);
+		    oid_to_hex(&obj->oid), name);
 	}
-	if (revs->pending.nr) {
-		free(revs->pending.objects);
-		revs->pending.nr = 0;
-		revs->pending.alloc = 0;
-		revs->pending.objects = NULL;
-	}
+	object_array_clear(&revs->pending);
 	strbuf_release(&base);
 }

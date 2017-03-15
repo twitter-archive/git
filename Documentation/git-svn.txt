@@ -70,8 +70,8 @@ COMMANDS
 --username=<user>;;
 	For transports that SVN handles authentication for (http,
 	https, and plain svn), specify the username.  For other
-	transports (eg svn+ssh://), you must include the username in
-	the URL, eg svn+ssh://foo@svn.bar.com/project
+	transports (e.g. `svn+ssh://`), you must include the username in
+	the URL, e.g. `svn+ssh://foo@svn.bar.com/project`
 --prefix=<prefix>;;
 	This allows one to specify a prefix which is prepended
 	to the names of remotes if trunk/branches/tags are
@@ -86,22 +86,23 @@ COMMANDS
 	(refs/remotes/$remote/*). Setting a prefix is also useful
 	if you wish to track multiple projects that share a common
 	repository.
+	By default, the prefix is set to 'origin/'.
 +
-NOTE: In Git v2.0, the default prefix will CHANGE from "" (no prefix)
-to "origin/". This is done to put SVN-tracking refs at
-"refs/remotes/origin/*" instead of "refs/remotes/*", and make them
-more compatible with how Git's own remote-tracking refs are organized
-(i.e. refs/remotes/$remote/*). You can enjoy the same benefits today,
-by using the --prefix option.
+NOTE: Before Git v2.0, the default prefix was "" (no prefix). This
+meant that SVN-tracking refs were put at "refs/remotes/*", which is
+incompatible with how Git's own remote-tracking refs are organized.
+If you still want the old default, you can get it by passing
+`--prefix ""` on the command line (`--prefix=""` may not work if
+your Perl's Getopt::Long is < v2.37).
 
 --ignore-paths=<regex>;;
 	When passed to 'init' or 'clone' this regular expression will
 	be preserved as a config key.  See 'fetch' for a description
-	of '--ignore-paths'.
+	of `--ignore-paths`.
 --include-paths=<regex>;;
 	When passed to 'init' or 'clone' this regular expression will
 	be preserved as a config key.  See 'fetch' for a description
-	of '--include-paths'.
+	of `--include-paths`.
 --no-minimize-url;;
 	When tracking multiple directories (using --stdlayout,
 	--branches, or --tags options), git svn will attempt to connect
@@ -109,7 +110,7 @@ by using the --prefix option.
 	repository.  This default allows better tracking of history if
 	entire projects are moved within a repository, but may cause
 	issues on repositories where read access restrictions are in
-	place.  Passing '--no-minimize-url' will allow git svn to
+	place.  Passing `--no-minimize-url` will allow git svn to
 	accept URLs as-is without attempting to connect to a higher
 	level directory.  This option is off by default when only
 	one URL/branch is tracked (it would do little good).
@@ -140,15 +141,15 @@ the same local time zone.
 --ignore-paths=<regex>;;
 	This allows one to specify a Perl regular expression that will
 	cause skipping of all matching paths from checkout from SVN.
-	The '--ignore-paths' option should match for every 'fetch'
+	The `--ignore-paths` option should match for every 'fetch'
 	(including automatic fetches due to 'clone', 'dcommit',
 	'rebase', etc) on a given repository.
 +
 [verse]
 config key: svn-remote.<name>.ignore-paths
 +
-If the ignore-paths config key is set and the command line option is
-also given, both regular expressions will be used.
+If the ignore-paths configuration key is set, and the command-line
+option is also given, both regular expressions will be used.
 +
 Examples:
 +
@@ -169,10 +170,13 @@ Skip "branches" and "tags" of first level directories;;
 --include-paths=<regex>;;
 	This allows one to specify a Perl regular expression that will
 	cause the inclusion of only matching paths from checkout from SVN.
-	The '--include-paths' option should match for every 'fetch'
+	The `--include-paths` option should match for every 'fetch'
 	(including automatic fetches due to 'clone', 'dcommit',
-	'rebase', etc) on a given repository. '--ignore-paths' takes
-	precedence over '--include-paths'.
+	'rebase', etc) on a given repository. `--ignore-paths` takes
+	precedence over `--include-paths`.
++
+[verse]
+config key: svn-remote.<name>.include-paths
 
 --log-window-size=<n>;;
 	Fetch <n> log entries per request when scanning Subversion history.
@@ -187,7 +191,7 @@ Skip "branches" and "tags" of first level directories;;
 	or if a second argument is passed; it will create a directory
 	and work within that.  It accepts all arguments that the
 	'init' and 'fetch' commands accept; with the exception of
-	'--fetch-all' and '--parent'.  After a repository is cloned,
+	`--fetch-all` and `--parent`.  After a repository is cloned,
 	the 'fetch' command will be able to update revisions without
 	affecting the working tree; and the 'rebase' command will be
 	able to update the working tree with the latest changes.
@@ -212,7 +216,7 @@ it preserves linear history with 'git rebase' instead of
 'git merge' for ease of dcommitting with 'git svn'.
 +
 This accepts all options that 'git svn fetch' and 'git rebase'
-accept.  However, '--fetch-all' only fetches from the current
+accept.  However, `--fetch-all` only fetches from the current
 [svn-remote], and not all [svn-remote] definitions.
 +
 Like 'git rebase'; this requires that the working tree be clean
@@ -251,6 +255,10 @@ Use of 'dcommit' is preferred to 'set-tree' (below).
 config key: svn-remote.<name>.commiturl
 config key: svn.commiturl (overwrites all svn-remote.<name>.commiturl options)
 +
+Note that the SVN URL of the commiturl config key includes the SVN branch.
+If you rather want to set the commit URL for an entire SVN repository use
+svn-remote.<name>.pushurl instead.
++
 Using this option for any other purpose (don't ask) is very strongly
 discouraged.
 
@@ -274,9 +282,9 @@ first have already been pushed into SVN.
 	Ask the user to confirm that a patch set should actually be sent to SVN.
 	For each patch, one may answer "yes" (accept this patch), "no" (discard this
 	patch), "all" (accept all patches), or "quit".
-	+
-	'git svn dcommit' returns immediately if answer is "no" or "quit", without
-	committing anything to SVN.
++
+'git svn dcommit' returns immediately if answer is "no" or "quit", without
+committing anything to SVN.
 
 'branch'::
 	Create a branch in the SVN repository.
@@ -385,11 +393,13 @@ Any other arguments are passed directly to 'git log'
 	tree-ish to specify which branch should be searched).  When given a
 	tree-ish, returns the corresponding SVN revision number.
 +
+-B;;
 --before;;
 	Don't require an exact match if given an SVN revision, instead find
 	the commit corresponding to the state of the SVN repository (on the
 	current branch) at the specified revision.
 +
+-A;;
 --after;;
 	Don't require an exact match if given an SVN revision; if there is
 	not an exact match return the closest match searching forward in the
@@ -448,6 +458,20 @@ Any other arguments are passed directly to 'git log'
 'propget'::
 	Gets the Subversion property given as the first argument, for a
 	file.  A specific revision can be specified with -r/--revision.
+
+'propset'::
+	Sets the Subversion property given as the first argument, to the
+	value given as the second argument for the file given as the
+	third argument.
++
+Example:
++
+------------------------------------------------------------------------
+git svn propset svn:keywords "FreeBSD=%H" devel/py-tipper/Makefile
+------------------------------------------------------------------------
++
+This will set the property 'svn:keywords' to 'FreeBSD=%H' for the file
+'devel/py-tipper/Makefile'.
 
 'show-externals'::
 	Shows the Subversion externals.  Use -r/--revision to specify a
@@ -601,26 +625,14 @@ config key: svn.authorsfile
 	with the committer name as the first argument.  The program is
 	expected to return a single line of the form "Name <email>",
 	which will be treated as if included in the authors file.
++
+[verse]
+config key: svn.authorsProg
 
 -q::
 --quiet::
 	Make 'git svn' less verbose. Specify a second time to make it
 	even less verbose.
-
---repack[=<n>]::
---repack-flags=<flags>::
-	These should help keep disk usage sane for large fetches with
-	many revisions.
-+
---repack takes an optional argument for the number of revisions
-to fetch before repacking.  This defaults to repacking every
-1000 commits fetched if no argument is specified.
-+
---repack-flags are passed directly to 'git repack'.
-+
-[verse]
-config key: svn.repack
-config key: svn.repackflags
 
 -m::
 --merge::
@@ -652,13 +664,19 @@ creating the branch or tag.
 	When retrieving svn commits into Git (as part of 'fetch', 'rebase', or
 	'dcommit' operations), look for the first `From:` or `Signed-off-by:` line
 	in the log message and use that as the author string.
++
+[verse]
+config key: svn.useLogAuthor
+
 --add-author-from::
 	When committing to svn from Git (as part of 'commit-diff', 'set-tree' or 'dcommit'
 	operations), if the existing log message doesn't already have a
 	`From:` or `Signed-off-by:` line, append a `From:` line based on the
 	Git commit's author string.  If you use this, then `--use-log-author`
 	will retrieve a valid author string for all commits.
-
++
+[verse]
+config key: svn.addAuthorFrom
 
 ADVANCED OPTIONS
 ----------------
@@ -753,7 +771,7 @@ svn-remote.<name>.rewriteUUID::
 
 svn-remote.<name>.pushurl::
 
-	Similar to Git's 'remote.<name>.pushurl', this key is designed
+	Similar to Git's `remote.<name>.pushurl`, this key is designed
 	to be used in cases where 'url' points to an SVN repository
 	via a read-only transport, to provide an alternate read/write
 	transport. It is assumed that both keys point to the same
@@ -910,7 +928,7 @@ parent of the branch. However, it is possible that there is no suitable
 Git commit to serve as parent.  This will happen, among other reasons,
 if the SVN branch is a copy of a revision that was not fetched by 'git
 svn' (e.g. because it is an old revision that was skipped with
-'--revision'), or if in SVN a directory was copied that is not tracked
+`--revision`), or if in SVN a directory was copied that is not tracked
 by 'git svn' (such as a branch that is not tracked at all, or a
 subdirectory of a tracked branch). In these cases, 'git svn' will still
 create a Git branch, but instead of using an existing Git commit as the
@@ -987,22 +1005,12 @@ directories in the working copy.  While this is the easiest way to get a
 copy of a complete repository, for projects with many branches it will
 lead to a working copy many times larger than just the trunk. Thus for
 projects using the standard directory structure (trunk/branches/tags),
-it is recommended to clone with option '--stdlayout'. If the project
+it is recommended to clone with option `--stdlayout`. If the project
 uses a non-standard structure, and/or if branches and tags are not
 required, it is easiest to only clone one directory (typically trunk),
 without giving any repository layout options.  If the full history with
-branches and tags is required, the options '--trunk' / '--branches' /
-'--tags' must be used.
-
-When using the options for describing the repository layout (--trunk,
---tags, --branches, --stdlayout), please also specify the --prefix
-option (e.g. '--prefix=origin/') to cause your SVN-tracking refs to be
-placed at refs/remotes/origin/* rather than the default refs/remotes/*.
-The former is more compatible with the layout of Git's "regular"
-remote-tracking refs (refs/remotes/$remote/*), and may potentially
-prevent similarly named SVN branches and Git remotes from clobbering
-each other. In Git v2.0 the default prefix used (i.e. when no --prefix
-is given) will change from "" (no prefix) to "origin/".
+branches and tags is required, the options `--trunk` / `--branches` /
+`--tags` must be used.
 
 When using multiple --branches or --tags, 'git svn' does not automatically
 handle name collisions (for example, if two branches from different paths have
@@ -1049,6 +1057,8 @@ listed below are allowed:
 	url = http://server.org/svn
 	fetch = trunk/project-a:refs/remotes/project-a/trunk
 	branches = branches/*/project-a:refs/remotes/project-a/branches/*
+	branches = branches/release_*:refs/remotes/project-a/branches/release_*
+	branches = branches/re*se:refs/remotes/project-a/branches/*
 	tags = tags/*/project-a:refs/remotes/project-a/tags/*
 ------------------------------------------------------------------------
 
@@ -1058,6 +1068,16 @@ however the remote wildcard may be anywhere as long as it's an
 independent path component (surrounded by '/' or EOL).   This
 type of configuration is not automatically created by 'init' and
 should be manually entered with a text-editor or using 'git config'.
+
+Also note that only one asterisk is allowed per word. For example:
+
+	branches = branches/re*se:refs/remotes/project-a/branches/*
+
+will match branches 'release', 'rese', 're123se', however
+
+	branches = branches/re*s*e:refs/remotes/project-a/branches/*
+
+will produce an error.
 
 It is also possible to fetch a subset of branches or tags by using a
 comma-separated list of names within braces. For example:

@@ -8,10 +8,10 @@ git-add - Add file contents to the index
 SYNOPSIS
 --------
 [verse]
-'git add' [-n] [-v] [--force | -f] [--interactive | -i] [--patch | -p]
+'git add' [--verbose | -v] [--dry-run | -n] [--force | -f] [--interactive | -i] [--patch | -p]
 	  [--edit | -e] [--[no-]all | --[no-]ignore-removal | [--update | -u]]
 	  [--intent-to-add | -N] [--refresh] [--ignore-errors] [--ignore-missing]
-	  [--] [<pathspec>...]
+	  [--chmod=(+|-)x] [--] [<pathspec>...]
 
 DESCRIPTION
 -----------
@@ -24,7 +24,7 @@ remove paths that do not exist in the working tree anymore.
 
 The "index" holds a snapshot of the content of the working tree, and it
 is this snapshot that is taken as the contents of the next commit.  Thus
-after making any changes to the working directory, and before running
+after making any changes to the working tree, and before running
 the commit command, you must use the `add` command to add any new or
 modified files to the index.
 
@@ -93,7 +93,8 @@ This effectively runs `add --interactive`, but bypasses the
 initial command menu and directly jumps to the `patch` subcommand.
 See ``Interactive mode'' for details.
 
--e, \--edit::
+-e::
+--edit::
 	Open the diff vs. the index in an editor and let the user
 	edit it.  After the editor was closed, adjust the hunk headers
 	and apply the patch to the index.
@@ -164,6 +165,11 @@ for "git add --no-all <pathspec>...", i.e. ignored removed files.
 	be ignored, no matter if they are already present in the work
 	tree or not.
 
+--chmod=(+|-)x::
+	Override the executable bit of the added files.  The executable
+	bit is only changed in the index, the files on disk are left
+	unchanged.
+
 \--::
 	This option can be used to separate command-line options from
 	the list of files, (useful when filenames might be mistaken
@@ -173,7 +179,7 @@ for "git add --no-all <pathspec>...", i.e. ignored removed files.
 Configuration
 -------------
 
-The optional configuration variable `core.excludesfile` indicates a path to a
+The optional configuration variable `core.excludesFile` indicates a path to a
 file containing patterns of file names to exclude from git-add, similar to
 $GIT_DIR/info/exclude.  Patterns in the exclude file are used in addition to
 those in info/exclude.  See linkgit:gitignore[5].
@@ -300,9 +306,9 @@ patch::
 
        y - stage this hunk
        n - do not stage this hunk
-       q - quit; do not stage this hunk nor any of the remaining ones
+       q - quit; do not stage this hunk or any of the remaining ones
        a - stage this hunk and all later hunks in the file
-       d - do not stage this hunk nor any of the later hunks in the file
+       d - do not stage this hunk or any of the later hunks in the file
        g - select a hunk to go to
        / - search for a hunk matching the given regex
        j - leave this hunk undecided, see next undecided hunk
@@ -317,7 +323,7 @@ After deciding the fate for all hunks, if there is any hunk
 that was chosen, the index is updated with the selected hunks.
 +
 You can omit having to type return here, by setting the configuration
-variable `interactive.singlekey` to `true`.
+variable `interactive.singleKey` to `true`.
 
 diff::
 

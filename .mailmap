@@ -13,6 +13,7 @@ Alex Riesen <raa.lkml@gmail.com> <raa@limbo.localdomain>
 Alex Riesen <raa.lkml@gmail.com> <raa@steel.home>
 Alex Vandiver <alex@chmrr.net> <alexmv@MIT.EDU>
 Alexander Gavrilov <angavrilov@gmail.com>
+Alexander Kuleshov <kuleshovmail@gmail.com>
 Alexey Shumkin <alex.crezoff@gmail.com> <zapped@mail.ru>
 Alexey Shumkin <alex.crezoff@gmail.com> <Alex.Crezoff@gmail.com>
 Anders Kaseorg <andersk@MIT.EDU> <andersk@ksplice.com>
@@ -32,6 +33,7 @@ Cheng Renquan <crquan@gmail.com>
 Chris Shoemaker <c.shoemaker@cox.net>
 Chris Wright <chrisw@sous-sol.org> <chrisw@osdl.org>
 Cord Seele <cowose@gmail.com> <cowose@googlemail.com>
+Christian Couder <chriscool@tuxfamily.org> <christian.couder@gmail.com>
 Christian Stimming <stimming@tuhh.de> <chs@ckiste.goetheallee>
 Csaba Henk <csaba@gluster.com> <csaba@lowlife.hu>
 Dan Johnson <computerdruid@gmail.com>
@@ -45,11 +47,14 @@ David D. Kilzer <ddkilzer@kilzer.net>
 David Kågedal <davidk@lysator.liu.se>
 David Reiss <dreiss@facebook.com> <dreiss@dreiss-vmware.(none)>
 David S. Miller <davem@davemloft.net>
+David Turner <novalis@novalis.org> <dturner@twopensource.com>
+David Turner <novalis@novalis.org> <dturner@twosigma.com>
 Deskin Miller <deskinm@umich.edu>
 Dirk Süsserott <newsletter@dirk.my1.cc>
 Eric Blake <eblake@redhat.com> <ebb9@byu.net>
 Eric Hanchrow <eric.hanchrow@gmail.com> <offby1@blarg.net>
 Eric S. Raymond <esr@thyrsus.com>
+Eric Wong <e@80x24.org> <normalperson@yhbt.net>
 Erik Faye-Lund <kusmabite@gmail.com> <kusmabite@googlemail.com>
 Eyvind Bernhardsen <eyvind.bernhardsen@gmail.com> <eyvind-git@orakel.ntnu.no>
 Florian Achleitner <florian.achleitner.2.6.31@gmail.com> <florian.achleitner2.6.31@gmail.com>
@@ -85,6 +90,7 @@ Jeff King <peff@peff.net> <peff@github.com>
 Jeff Muizelaar <jmuizelaar@mozilla.com> <jeff@infidigm.net>
 Jens Axboe <axboe@kernel.dk> <axboe@suse.de>
 Jens Axboe <axboe@kernel.dk> <jens.axboe@oracle.com>
+Jens Lindström <jl@opera.com> Jens Lindstrom <jl@opera.com>
 Jim Meyering <jim@meyering.net> <meyering@redhat.com>
 Joachim Berdal Haga <cjhaga@fys.uio.no>
 Johannes Schindelin <Johannes.Schindelin@gmx.de> <johannes.schindelin@gmx.de>
@@ -113,6 +119,7 @@ Karsten Blees <blees@dcon.de> <karsten.blees@dcon.de>
 Karsten Blees <blees@dcon.de> <karsten.blees@gmail.com>
 Kay Sievers <kay.sievers@vrfy.org> <kay.sievers@suse.de>
 Kay Sievers <kay.sievers@vrfy.org> <kay@mam.(none)>
+Kazuki Saitoh <ksaitoh560@gmail.com> kazuki saitoh <ksaitoh560@gmail.com>
 Keith Cascio <keith@CS.UCLA.EDU> <keith@cs.ucla.edu>
 Kent Engstrom <kent@lysator.liu.se>
 Kevin Leung <kevinlsk@gmail.com>
@@ -170,6 +177,7 @@ Paolo Bonzini <bonzini@gnu.org> <paolo.bonzini@lu.unisi.ch>
 Pascal Obry <pascal@obry.net> <pascal.obry@gmail.com>
 Pascal Obry <pascal@obry.net> <pascal.obry@wanadoo.fr>
 Pat Notz <patnotz@gmail.com> <pknotz@sandia.gov>
+Patrick Steinhardt <ps@pks.im> <patrick.steinhardt@elego.de>
 Paul Mackerras <paulus@samba.org> <paulus@dorrigo.(none)>
 Paul Mackerras <paulus@samba.org> <paulus@pogo.(none)>
 Peter Baumann <waste.manager@gmx.de> <Peter.B.Baumann@stud.informatik.uni-erlangen.de>
@@ -183,8 +191,10 @@ Philip Jägenstedt <philip@foolip.org> <philip.jagenstedt@gmail.com>
 Philipp A. Hartmann <pah@qo.cx> <ph@sorgh.de>
 Philippe Bruhat <book@cpan.org>
 Ralf Thielow <ralf.thielow@gmail.com> <ralf.thielow@googlemail.com>
-Ramsay Allan Jones <ramsay@ramsay1.demon.co.uk>
+Ramsay Jones <ramsay@ramsayjones.plus.com> <ramsay@ramsay1.demon.co.uk>
 René Scharfe <l.s.r@web.de> <rene.scharfe@lsrfire.ath.cx>
+Richard Hansen <rhansen@rhansen.org> <hansenr@google.com>
+Richard Hansen <rhansen@rhansen.org> <rhansen@bbn.com>
 Robert Fitzsimons <robfitz@273k.net>
 Robert Shearman <robertshearman@gmail.com> <rob@codeweavers.com>
 Robert Zeh <robert.a.zeh@gmail.com>
@@ -202,6 +212,8 @@ Seth Falcon <seth@userprimary.net> <sfalcon@fhcrc.org>
 Shawn O. Pearce <spearce@spearce.org>
 Simon Hausmann <hausmann@kde.org> <simon@lst.de>
 Simon Hausmann <hausmann@kde.org> <shausman@trolltech.com>
+Stefan Beller <stefanbeller@gmail.com> <stefanbeller@googlemail.com>
+Stefan Beller <stefanbeller@gmail.com> <sbeller@google.com>
 Stefan Naewe <stefan.naewe@gmail.com> <stefan.naewe@atlas-elektronik.com>
 Stefan Naewe <stefan.naewe@gmail.com> <stefan.naewe@googlemail.com>
 Stefan Sperling <stsp@elego.de> <stsp@stsp.name>
@@ -214,6 +226,7 @@ Steven Walter <stevenrwalter@gmail.com> <swalter@lexmark.com>
 Steven Walter <stevenrwalter@gmail.com> <swalter@lpdev.prtdev.lexmark.com>
 Sven Verdoolaege <skimo@kotnet.org> <Sven.Verdoolaege@cs.kuleuven.ac.be>
 Sven Verdoolaege <skimo@kotnet.org> <skimo@liacs.nl>
+SZEDER Gábor <szeder.dev@gmail.com> <szeder@ira.uka.de>
 Tay Ray Chuan <rctay89@gmail.com>
 Ted Percival <ted@midg3t.net> <ted.percival@quest.com>
 Theodore Ts'o <tytso@mit.edu>
@@ -229,6 +242,7 @@ Tommi Virtanen <tv@debian.org> <tv@inoi.fi>
 Tommy Thorn <tommy-git@thorn.ws> <tt1729@yahoo.com>
 Tony Luck <tony.luck@intel.com>
 Tor Arne Vestbø <torarnv@gmail.com> <tavestbo@trolltech.com>
+Trần Ngọc Quân <vnwildman@gmail.com> Tran Ngoc Quan <vnwildman@gmail.com>
 Trent Piepho <tpiepho@gmail.com> <tpiepho@freescale.com>
 Trent Piepho <tpiepho@gmail.com> <xyzzy@speakeasy.org>
 Uwe Kleine-König <u.kleine-koenig@pengutronix.de> <Uwe.Kleine-Koenig@digi.com>

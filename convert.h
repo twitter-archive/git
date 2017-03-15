@@ -7,7 +7,8 @@
 enum safe_crlf {
 	SAFE_CRLF_FALSE = 0,
 	SAFE_CRLF_FAIL = 1,
-	SAFE_CRLF_WARN = 2
+	SAFE_CRLF_WARN = 2,
+	SAFE_CRLF_RENORMALIZE = 3
 };
 
 extern enum safe_crlf safe_crlf;
@@ -32,6 +33,9 @@ enum eol {
 };
 
 extern enum eol core_eol;
+extern const char *get_cached_convert_stats_ascii(const char *path);
+extern const char *get_wt_convert_stats_ascii(const char *path);
+extern const char *get_convert_attr_ascii(const char *path);
 
 /* returns 1 if *dst was used */
 extern int convert_to_git(const char *path, const char *src, size_t len,
@@ -40,11 +44,15 @@ extern int convert_to_working_tree(const char *path, const char *src,
 				   size_t len, struct strbuf *dst);
 extern int renormalize_buffer(const char *path, const char *src, size_t len,
 			      struct strbuf *dst);
-static inline int would_convert_to_git(const char *path, const char *src,
-				       size_t len, enum safe_crlf checksafe)
+static inline int would_convert_to_git(const char *path)
 {
-	return convert_to_git(path, src, len, NULL, checksafe);
+	return convert_to_git(path, NULL, 0, NULL, 0);
 }
+/* Precondition: would_convert_to_git_filter_fd(path) == true */
+extern void convert_to_git_filter_fd(const char *path, int fd,
+				     struct strbuf *dst,
+				     enum safe_crlf checksafe);
+extern int would_convert_to_git_filter_fd(const char *path);
 
 /*****************************************************************
  *

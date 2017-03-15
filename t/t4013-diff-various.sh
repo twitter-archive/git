@@ -90,6 +90,8 @@ test_expect_success setup '
 	git commit -m "Rearranged lines in dir/sub" &&
 	git checkout master &&
 
+	git config diff.renames false &&
+
 	git show-branch
 '
 
@@ -107,14 +109,14 @@ test_expect_success setup '
 +*++ [initial] Initial
 EOF
 
-V=`git version | sed -e 's/^git version //' -e 's/\./\\./g'`
+V=$(git version | sed -e 's/^git version //' -e 's/\./\\./g')
 while read cmd
 do
 	case "$cmd" in
 	'' | '#'*) continue ;;
 	esac
-	test=`echo "$cmd" | sed -e 's|[/ ][/ ]*|_|g'`
-	pfx=`printf "%04d" $test_count`
+	test=$(echo "$cmd" | sed -e 's|[/ ][/ ]*|_|g')
+	pfx=$(printf "%04d" $test_count)
 	expect="$TEST_DIRECTORY/t4013/diff.$test"
 	actual="$pfx-diff.$test"
 
@@ -304,9 +306,18 @@ diff --no-index --name-status dir2 dir
 diff --no-index --name-status -- dir2 dir
 diff --no-index dir dir3
 diff master master^ side
+# Can't use spaces...
+diff --line-prefix=abc master master^ side
 diff --dirstat master~1 master~2
 diff --dirstat initial rearrange
 diff --dirstat-by-file initial rearrange
+# No-index --abbrev and --no-abbrev
+diff --raw initial
+diff --raw --abbrev=4 initial
+diff --raw --no-abbrev initial
+diff --no-index --raw dir2 dir
+diff --no-index --raw --abbrev=4 dir2 dir
+diff --no-index --raw --no-abbrev dir2 dir
 EOF
 
 test_expect_success 'log -S requires an argument' '
@@ -322,6 +333,20 @@ test_expect_success 'diff --cached on unborn branch' '
 test_expect_success 'diff --cached -- file on unborn branch' '
 	git diff --cached -- file0 >result &&
 	test_cmp "$TEST_DIRECTORY/t4013/diff.diff_--cached_--_file0" result
+'
+test_expect_success 'diff --line-prefix with spaces' '
+	git diff --line-prefix="| | | " --cached -- file0 >result &&
+	test_cmp "$TEST_DIRECTORY/t4013/diff.diff_--line-prefix_--cached_--_file0" result
+'
+
+test_expect_success 'diff-tree --stdin with log formatting' '
+	cat >expect <<-\EOF &&
+	Side
+	Third
+	Second
+	EOF
+	git rev-list master | git diff-tree --stdin --format=%s -s >actual &&
+	test_cmp expect actual
 '
 
 test_done

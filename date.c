@@ -74,6 +74,8 @@ static int local_tzoffset(unsigned long time)
 	localtime_r(&t, &tm);
 	t_local = tm_to_time_t(&tm);
 
+	if (t_local == -1)
+		return 0; /* error; just use +0000 */
 	if (t_local < t) {
 		eastwest = -1;
 		offset = t - t_local;
@@ -144,8 +146,8 @@ void show_date_relative(unsigned long time, int tz,
 		if (months) {
 			struct strbuf sb = STRBUF_INIT;
 			strbuf_addf(&sb, Q_("%lu year", "%lu years", years), years);
-			/* TRANSLATORS: "%s" is "<n> years" */
 			strbuf_addf(timebuf,
+				 /* TRANSLATORS: "%s" is "<n> years" */
 				 Q_("%s, %lu month ago", "%s, %lu months ago", months),
 				 sb.buf, months);
 			strbuf_release(&sb);
@@ -160,18 +162,37 @@ void show_date_relative(unsigned long time, int tz,
 		 (diff + 183) / 365);
 }
 
-const char *show_date(unsigned long time, int tz, enum date_mode mode)
+struct date_mode *date_mode_from_type(enum date_mode_type type)
+{
+	static struct date_mode mode;
+	if (type == DATE_STRFTIME)
+		die("BUG: cannot create anonymous strftime date_mode struct");
+	mode.type = type;
+	mode.local = 0;
+	return &mode;
+}
+
+const char *show_date(unsigned long time, int tz, const struct date_mode *mode)
 {
 	struct tm *tm;
 	static struct strbuf timebuf = STRBUF_INIT;
 
-	if (mode == DATE_RAW) {
+	if (mode->type == DATE_UNIX) {
+		strbuf_reset(&timebuf);
+		strbuf_addf(&timebuf, "%lu", time);
+		return timebuf.buf;
+	}
+
+	if (mode->local)
+		tz = local_tzoffset(time);
+
+	if (mode->type == DATE_RAW) {
 		strbuf_reset(&timebuf);
 		strbuf_addf(&timebuf, "%lu %+05d", time, tz);
 		return timebuf.buf;
 	}
 
-	if (mode == DATE_RELATIVE) {
+	if (mode->type == DATE_RELATIVE) {
 		struct timeval now;
 
 		strbuf_reset(&timebuf);
@@ -180,9 +201,6 @@ const char *show_date(unsigned long time, int tz, enum date_mode mode)
 		return timebuf.buf;
 	}
 
-	if (mode == DATE_LOCAL)
-		tz = local_tzoffset(time);
-
 	tm = time_to_tm(time, tz);
 	if (!tm) {
 		tm = time_to_tm(0, 0);
@@ -190,21 +208,32 @@ const char *show_date(unsigned long time, int tz, enum date_mode mode)
 	}
 
 	strbuf_reset(&timebuf);
-	if (mode == DATE_SHORT)
+	if (mode->type == DATE_SHORT)
 		strbuf_addf(&timebuf, "%04d-%02d-%02d", tm->tm_year + 1900,
 				tm->tm_mon + 1, tm->tm_mday);
-	else if (mode == DATE_ISO8601)
+	else if (mode->type == DATE_ISO8601)
 		strbuf_addf(&timebuf, "%04d-%02d-%02d %02d:%02d:%02d %+05d",
 				tm->tm_year + 1900,
 				tm->tm_mon + 1,
 				tm->tm_mday,
 				tm->tm_hour, tm->tm_min, tm->tm_sec,
 				tz);
-	else if (mode == DATE_RFC2822)
+	else if (mode->type == DATE_ISO8601_STRICT) {
+		char sign = (tz >= 0) ? '+' : '-';
+		tz = abs(tz);
+		strbuf_addf(&timebuf, "%04d-%02d-%02dT%02d:%02d:%02d%c%02d:%02d",
+				tm->tm_year + 1900,
+				tm->tm_mon + 1,
+				tm->tm_mday,
+				tm->tm_hour, tm->tm_min, tm->tm_sec,
+				sign, tz / 100, tz % 100);
+	} else if (mode->type == DATE_RFC2822)
 		strbuf_addf(&timebuf, "%.3s, %d %.3s %d %02d:%02d:%02d %+05d",
 			weekday_names[tm->tm_wday], tm->tm_mday,
 			month_names[tm->tm_mon], tm->tm_year + 1900,
 			tm->tm_hour, tm->tm_min, tm->tm_sec, tz);
+	else if (mode->type == DATE_STRFTIME)
+		strbuf_addftime(&timebuf, mode->strftime_fmt, tm);
 	else
 		strbuf_addf(&timebuf, "%.3s %.3s %d %02d:%02d:%02d %d%c%+05d",
 				weekday_names[tm->tm_wday],
@@ -212,7 +241,7 @@ const char *show_date(unsigned long time, int tz, enum date_mode mode)
 				tm->tm_mday,
 				tm->tm_hour, tm->tm_min, tm->tm_sec,
 				tm->tm_year + 1900,
-				(mode == DATE_LOCAL) ? 0 : ' ',
+				mode->local ? 0 : ' ',
 				tz);
 	return timebuf.buf;
 }
@@ -396,9 +425,9 @@ static int is_date(int year, int month, int day, struct tm *now_tm, time_t now, 
 	return 0;
 }
 
-static int match_multi_number(unsigned long num, char c, const char *date, char *end, struct tm *tm)
+static int match_multi_number(unsigned long num, char c, const char *date,
+			      char *end, struct tm *tm, time_t now)
 {
-	time_t now;
 	struct tm now_tm;
 	struct tm *refuse_future;
 	long num2, num3;
@@ -424,17 +453,18 @@ static int match_multi_number(unsigned long num, char c, const char *date, char 
 	case '-':
 	case '/':
 	case '.':
-		now = time(NULL);
+		if (!now)
+			now = time(NULL);
 		refuse_future = NULL;
 		if (gmtime_r(&now, &now_tm))
 			refuse_future = &now_tm;
 
 		if (num > 70) {
 			/* yyyy-mm-dd? */
-			if (is_date(num, num2, num3, refuse_future, now, tm))
+			if (is_date(num, num2, num3, NULL, now, tm))
 				break;
 			/* yyyy-dd-mm? */
-			if (is_date(num, num3, num2, refuse_future, now, tm))
+			if (is_date(num, num3, num2, NULL, now, tm))
 				break;
 		}
 		/* Our eastern European friends say dd.mm.yy[yy]
@@ -504,7 +534,7 @@ static int match_digit(const char *date, struct tm *tm, int *offset, int *tm_gmt
 	case '/':
 	case '-':
 		if (isdigit(end[1])) {
-			int match = match_multi_number(num, *end, date, end, tm);
+			int match = match_multi_number(num, *end, date, end, tm, 0);
 			if (match)
 				return match;
 		}
@@ -605,7 +635,7 @@ static int match_tz(const char *date, int *offp)
 	return end - date;
 }
 
-static int date_string(unsigned long date, int offset, char *buf, int len)
+static void date_string(unsigned long date, int offset, struct strbuf *buf)
 {
 	int sign = '+';
 
@@ -613,7 +643,7 @@ static int date_string(unsigned long date, int offset, char *buf, int len)
 		offset = -offset;
 		sign = '-';
 	}
-	return snprintf(buf, len, "%lu %c%02d%02d", date, sign, offset / 60, offset % 60);
+	strbuf_addf(buf, "%lu %c%02d%02d", date, sign, offset / 60, offset % 60);
 }
 
 /*
@@ -694,19 +724,23 @@ int parse_date_basic(const char *date, unsigned long *timestamp, int *offset)
 		date += match;
 	}
 
-	/* mktime uses local timezone */
+	/* do not use mktime(), which uses local timezone, here */
 	*timestamp = tm_to_time_t(&tm);
+	if (*timestamp == -1)
+		return -1;
+
 	if (*offset == -1) {
-		time_t temp_time = mktime(&tm);
+		time_t temp_time;
+
+		/* gmtime_r() in match_digit() may have clobbered it */
+		tm.tm_isdst = -1;
+		temp_time = mktime(&tm);
 		if ((time_t)*timestamp > temp_time) {
 			*offset = ((time_t)*timestamp - temp_time) / 60;
 		} else {
 			*offset = -(int)((temp_time - (time_t)*timestamp) / 60);
 		}
 	}
-
-	if (*timestamp == -1)
-		return -1;
 
 	if (!tm_gmt)
 		*timestamp -= *offset * 60;
@@ -735,38 +769,66 @@ int parse_expiry_date(const char *date, unsigned long *timestamp)
 	return errors;
 }
 
-int parse_date(const char *date, char *result, int maxlen)
+int parse_date(const char *date, struct strbuf *result)
 {
 	unsigned long timestamp;
 	int offset;
 	if (parse_date_basic(date, &timestamp, &offset))
 		return -1;
-	return date_string(timestamp, offset, result, maxlen);
+	date_string(timestamp, offset, result);
+	return 0;
 }
 
-enum date_mode parse_date_format(const char *format)
+static enum date_mode_type parse_date_type(const char *format, const char **end)
 {
-	if (!strcmp(format, "relative"))
+	if (skip_prefix(format, "relative", end))
 		return DATE_RELATIVE;
-	else if (!strcmp(format, "iso8601") ||
-		 !strcmp(format, "iso"))
+	if (skip_prefix(format, "iso8601-strict", end) ||
+	    skip_prefix(format, "iso-strict", end))
+		return DATE_ISO8601_STRICT;
+	if (skip_prefix(format, "iso8601", end) ||
+	    skip_prefix(format, "iso", end))
 		return DATE_ISO8601;
-	else if (!strcmp(format, "rfc2822") ||
-		 !strcmp(format, "rfc"))
+	if (skip_prefix(format, "rfc2822", end) ||
+	    skip_prefix(format, "rfc", end))
 		return DATE_RFC2822;
-	else if (!strcmp(format, "short"))
+	if (skip_prefix(format, "short", end))
 		return DATE_SHORT;
-	else if (!strcmp(format, "local"))
-		return DATE_LOCAL;
-	else if (!strcmp(format, "default"))
+	if (skip_prefix(format, "default", end))
 		return DATE_NORMAL;
-	else if (!strcmp(format, "raw"))
+	if (skip_prefix(format, "raw", end))
 		return DATE_RAW;
-	else
+	if (skip_prefix(format, "unix", end))
+		return DATE_UNIX;
+	if (skip_prefix(format, "format", end))
+		return DATE_STRFTIME;
+
+	die("unknown date format %s", format);
+}
+
+void parse_date_format(const char *format, struct date_mode *mode)
+{
+	const char *p;
+
+	/* historical alias */
+	if (!strcmp(format, "local"))
+		format = "default-local";
+
+	mode->type = parse_date_type(format, &p);
+	mode->local = 0;
+
+	if (skip_prefix(p, "-local", &p))
+		mode->local = 1;
+
+	if (mode->type == DATE_STRFTIME) {
+		if (!skip_prefix(p, ":", &p))
+			die("date format missing colon separator: %s", format);
+		mode->strftime_fmt = xstrdup(p);
+	} else if (*p)
 		die("unknown date format %s", format);
 }
 
-void datestamp(char *buf, int bufsize)
+void datestamp(struct strbuf *out)
 {
 	time_t now;
 	int offset;
@@ -776,7 +838,7 @@ void datestamp(char *buf, int bufsize)
 	offset = tm_to_time_t(localtime(&now)) - now;
 	offset /= 60;
 
-	date_string(now, offset, buf, bufsize);
+	date_string(now, offset, out);
 }
 
 /*
@@ -1000,7 +1062,8 @@ static const char *approxidate_alpha(const char *date, struct tm *tm, struct tm 
 	return end;
 }
 
-static const char *approxidate_digit(const char *date, struct tm *tm, int *num)
+static const char *approxidate_digit(const char *date, struct tm *tm, int *num,
+				     time_t now)
 {
 	char *end;
 	unsigned long number = strtoul(date, &end, 10);
@@ -1011,7 +1074,8 @@ static const char *approxidate_digit(const char *date, struct tm *tm, int *num)
 	case '/':
 	case '-':
 		if (isdigit(end[1])) {
-			int match = match_multi_number(number, *end, date, end, tm);
+			int match = match_multi_number(number, *end, date, end,
+						       tm, now);
 			if (match)
 				return date + match;
 		}
@@ -1074,7 +1138,7 @@ static unsigned long approxidate_str(const char *date,
 		date++;
 		if (isdigit(c)) {
 			pending_number(&tm, &number);
-			date = approxidate_digit(date-1, &tm, &number);
+			date = approxidate_digit(date-1, &tm, &number, time_sec);
 			touched = 1;
 			continue;
 		}

@@ -1,6 +1,17 @@
 # This file isn't used as a test script directly, instead it is
 # sourced from t8001-annotate.sh and t8002-blame.sh.
 
+if test_have_prereq MINGW
+then
+  sanitize_L () {
+	echo "$1" | sed 'sX\(^-L\|,\)\^\?/X&\\;*Xg'
+  }
+else
+  sanitize_L () {
+	echo "$1"
+  }
+fi
+
 check_count () {
 	head= &&
 	file='file' &&
@@ -10,6 +21,7 @@ check_count () {
 		case "$1" in
 		-h) head="$2"; shift; shift ;;
 		-f) file="$2"; shift; shift ;;
+		-L*) options="$options $(sanitize_L "$1")"; shift ;;
 		-*) options="$options $1"; shift ;;
 		*) break ;;
 		esac
@@ -56,6 +68,13 @@ test_expect_success 'blame 1 author' '
 	check_count A 2
 '
 
+test_expect_success 'blame by tag objects' '
+	git tag -m "test tag" testTag &&
+	git tag -m "test tag #2" testTag2 testTag &&
+	check_count -h testTag A 2 &&
+	check_count -h testTag2 A 2
+'
+
 test_expect_success 'setup B lines' '
 	echo "2A quick brown fox jumps over the" >>file &&
 	echo "lazy dog" >>file &&
@@ -97,6 +116,10 @@ test_expect_success 'merge branch1 & branch2' '
 
 test_expect_success 'blame 2 authors + 2 merged-in authors' '
 	check_count A 2 B 1 B1 2 B2 1
+'
+
+test_expect_success 'blame --first-parent blames merge for branch1' '
+	check_count --first-parent A 2 B 1 "A U Thor" 2 B2 1
 '
 
 test_expect_success 'blame ancestor' '
@@ -393,7 +416,7 @@ test_expect_success 'setup -L :regex' '
 	mv hello.c hello.orig &&
 	echo "#include <stdio.h>" >hello.c &&
 	cat hello.orig >>hello.c &&
-	tr Q "\\t" >>hello.c <<-\EOF
+	tr Q "\\t" >>hello.c <<-\EOF &&
 	void mail()
 	{
 	Qputs("mail");

@@ -416,12 +416,11 @@ REVISIONS" section of linkgit:gitrevisions[7].
 Updating a repository with git fetch
 ------------------------------------
 
-Eventually the developer cloned from will do additional work in her
-repository, creating new commits and advancing the branches to point
-at the new commits.
+After you clone a repository and commit a few changes of your own, you
+may wish to check the original repository for updates.
 
-The command `git fetch`, with no arguments, will update all of the
-remote-tracking branches to the latest version found in her
+The `git-fetch` command, with no arguments, will update all of the
+remote-tracking branches to the latest version found in the original
 repository.  It will not touch any of your own branches--not even the
 "master" branch that was created for you on clone.
 
@@ -1201,7 +1200,7 @@ for other users who clone your repository.
 If you wish the exclude patterns to affect only certain repositories
 (instead of every repository for a given project), you may instead put
 them in a file in your repository named `.git/info/exclude`, or in any
-file specified by the `core.excludesfile` configuration variable.
+file specified by the `core.excludesFile` configuration variable.
 Some Git commands can also take exclude patterns directly on the
 command line.  See linkgit:gitignore[5] for the details.
 
@@ -1432,11 +1431,11 @@ differently.  Normally, a merge results in a merge commit, with two
 parents, one pointing at each of the two lines of development that
 were merged.
 
-However, if the current branch is a descendant of the other--so every
-commit present in the one is already contained in the other--then Git
-just performs a "fast-forward"; the head of the current branch is moved
-forward to point at the head of the merged-in branch, without any new
-commits being created.
+However, if the current branch is an ancestor of the other--so every commit
+present in the current branch is already contained in the other branch--then Git
+just performs a "fast-forward"; the head of the current branch is moved forward
+to point at the head of the merged-in branch, without any new commits being
+created.
 
 [[fixing-mistakes]]
 Fixing mistakes
@@ -1492,7 +1491,7 @@ resolving a merge>>.
 
 [[fixing-a-mistake-by-rewriting-history]]
 Fixing a mistake by rewriting history
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 If the problematic commit is the most recent commit, and you have not
 yet made that commit public, then you may just
@@ -1811,8 +1810,8 @@ manner.
 You can then import these into your mail client and send them by
 hand.  However, if you have a lot to send at once, you may prefer to
 use the linkgit:git-send-email[1] script to automate the process.
-Consult the mailing list for your project first to determine how they
-prefer such patches be handled.
+Consult the mailing list for your project first to determine
+their requirements for submitting patches.
 
 [[importing-patches]]
 Importing patches to a project
@@ -2126,8 +2125,37 @@ Allowing web browsing of a repository
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The gitweb cgi script provides users an easy way to browse your
-project's files and history without having to install Git; see the file
-gitweb/INSTALL in the Git source tree for instructions on setting it up.
+project's revisions, file contents and logs without having to install
+Git. Features like RSS/Atom feeds and blame/annotation details may
+optionally be enabled.
+
+The linkgit:git-instaweb[1] command provides a simple way to start
+browsing the repository using gitweb. The default server when using
+instaweb is lighttpd.
+
+See the file gitweb/INSTALL in the Git source tree and
+linkgit:gitweb[1] for instructions on details setting up a permanent
+installation with a CGI or Perl capable server.
+
+[[how-to-get-a-git-repository-with-minimal-history]]
+How to get a Git repository with minimal history
+------------------------------------------------
+
+A <<def_shallow_clone,shallow clone>>, with its truncated
+history, is useful when one is interested only in recent history
+of a project and getting full history from the upstream is
+expensive.
+
+A <<def_shallow_clone,shallow clone>> is created by specifying
+the linkgit:git-clone[1] `--depth` switch. The depth can later be
+changed with the linkgit:git-fetch[1] `--depth` switch, or full
+history restored with `--unshallow`.
+
+Merging inside a <<def_shallow_clone,shallow clone>> will work as long
+as a merge base is in the recent history.
+Otherwise, it will be like merging unrelated histories and may
+have to result in huge conflicts.  This limitation may make such
+a repository unsuitable to be used in merge based workflows.
 
 [[sharing-development-examples]]
 Examples
@@ -2255,7 +2283,7 @@ $ git checkout test && git merge speed-up-spinlocks
 It is unlikely that you would have any conflicts here ... but you might if you
 spent a while on this step and had also pulled new versions from upstream.
 
-Some time later when enough time has passed and testing done, you can pull the
+Sometime later when enough time has passed and testing done, you can pull the
 same branch into the `release` tree ready to go upstream.  This is where you
 see the value of keeping each patch (or patch series) in its own branch.  It
 means that the patches can be moved into the `release` tree in any order.
@@ -3425,7 +3453,7 @@ just missing one particular blob version.
 
 [[the-index]]
 The index
------------
+---------
 
 The index is a binary file (generally kept in `.git/index`) containing a
 sorted list of path names, each with permissions and the SHA-1 of a blob
@@ -4074,7 +4102,7 @@ the `HEAD` tree, and stage 3 to the `$target` tree.
 
 Earlier we said that trivial merges are done inside
 `git read-tree -m`.  For example, if the file did not change
-from `$orig` to `HEAD` nor `$target`, or if the file changed
+from `$orig` to `HEAD` or `$target`, or if the file changed
 from `$orig` to `HEAD` and `$orig` to `$target` the same way,
 obviously the final outcome is what is in `HEAD`.  What the
 above example shows is that file `hello.c` was changed from
@@ -4231,9 +4259,9 @@ Most of what `git rev-list` did is contained in `revision.c` and
 controls how and what revisions are walked, and more.
 
 The original job of `git rev-parse` is now taken by the function
-`setup_revisions()`, which parses the revisions and the common command line
+`setup_revisions()`, which parses the revisions and the common command-line
 options for the revision walker. This information is stored in the struct
-`rev_info` for later consumption. You can do your own command line option
+`rev_info` for later consumption. You can do your own command-line option
 parsing after calling `setup_revisions()`. After that, you have to call
 `prepare_revision_walk()` for initialization, and then you can get the
 commits one by one with the function `get_revision()`.
@@ -4366,6 +4394,10 @@ itself!
 [[glossary]]
 Git Glossary
 ============
+
+[[git-explained]]
+Git explained
+-------------
 
 include::glossary-content.txt[]
 
@@ -4608,6 +4640,10 @@ $ git gc
 Appendix B: Notes and todo list for this manual
 ===============================================
 
+[[todo-list]]
+Todo list
+---------
+
 This is a work in progress.
 
 The basic requirements:
@@ -4637,22 +4673,14 @@ Scan email archives for other stuff left out
 Scan man pages to see if any assume more background than this manual
 provides.
 
-Simplify beginning by suggesting disconnected head instead of
-temporary branch creation?
-
 Add more good examples.  Entire sections of just cookbook examples
 might be a good idea; maybe make an "advanced examples" section a
 standard end-of-chapter section?
 
 Include cross-references to the glossary, where appropriate.
 
-Document shallow clones?  See draft 1.5.0 release notes for some
-documentation.
-
 Add a section on working with other version control systems, including
 CVS, Subversion, and just imports of series of release tarballs.
-
-More details on gitweb?
 
 Write a chapter on using plumbing and writing scripts.
 

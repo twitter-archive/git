@@ -38,10 +38,9 @@ int launch_editor(const char *path, struct strbuf *buffer, const char *const *en
 
 	if (strcmp(editor, ":")) {
 		const char *args[] = { editor, real_path(path), NULL };
-		struct child_process p;
+		struct child_process p = CHILD_PROCESS_INIT;
 		int ret, sig;
 
-		memset(&p, 0, sizeof(p));
 		p.argv = args;
 		p.env = env;
 		p.use_shell = 1;
@@ -64,7 +63,6 @@ int launch_editor(const char *path, struct strbuf *buffer, const char *const *en
 	if (!buffer)
 		return 0;
 	if (strbuf_read_file(buffer, path, 0) < 0)
-		return error("could not read file '%s': %s",
-				path, strerror(errno));
+		return error_errno("could not read file '%s'", path);
 	return 0;
 }

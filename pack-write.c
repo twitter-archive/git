@@ -61,8 +61,7 @@ const char *write_idx_file(const char *index_name, struct pack_idx_entry **objec
 			if (objects[i]->offset > last_obj_offset)
 				last_obj_offset = objects[i]->offset;
 		}
-		qsort(sorted_by_sha, nr_objects, sizeof(sorted_by_sha[0]),
-		      sha1_compare);
+		QSORT(sorted_by_sha, nr_objects, sha1_compare);
 	}
 	else
 		sorted_by_sha = list = last = NULL;
@@ -288,13 +287,12 @@ char *index_pack_lockfile(int ip_out)
 	 * case, we need it to remove the corresponding .keep file
 	 * later on.  If we don't get that then tough luck with it.
 	 */
-	if (read_in_full(ip_out, packname, 46) == 46 && packname[45] == '\n' &&
-	    memcmp(packname, "keep\t", 5) == 0) {
-		char path[PATH_MAX];
+	if (read_in_full(ip_out, packname, 46) == 46 && packname[45] == '\n') {
+		const char *name;
 		packname[45] = 0;
-		snprintf(path, sizeof(path), "%s/pack/pack-%s.keep",
-			 get_object_directory(), packname + 5);
-		return xstrdup(path);
+		if (skip_prefix(packname, "keep\t", &name))
+			return xstrfmt("%s/pack/pack-%s.keep",
+				       get_object_directory(), name);
 	}
 	return NULL;
 }
@@ -355,7 +353,6 @@ void finish_tmp_packfile(struct strbuf *name_buffer,
 		die_errno("unable to make temporary index file readable");
 
 	strbuf_addf(name_buffer, "%s.pack", sha1_to_hex(sha1));
-	free_pack_by_name(name_buffer->buf);
 
 	if (rename(pack_tmp_name, name_buffer->buf))
 		die_errno("unable to rename temporary pack file");

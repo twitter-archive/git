@@ -9,7 +9,7 @@ git-imap-send - Send a collection of patches from stdin to an IMAP folder
 SYNOPSIS
 --------
 [verse]
-'git imap-send'
+'git imap-send' [-v] [-q] [--[no-]curl]
 
 
 DESCRIPTION
@@ -26,6 +26,28 @@ Typical usage is something like:
 git format-patch --signoff --stdout --attach origin | git imap-send
 
 
+OPTIONS
+-------
+
+-v::
+--verbose::
+	Be verbose.
+
+-q::
+--quiet::
+	Be quiet.
+
+--curl::
+	Use libcurl to communicate with the IMAP server, unless tunneling
+	into it.  Ignored if Git was built without the USE_CURL_FOR_IMAP_SEND
+	option set.
+
+--no-curl::
+	Talk to the IMAP server using git's own IMAP routines instead of
+	using libcurl.  Ignored if Git was built with the NO_OPENSSL option
+	set.
+
+
 CONFIGURATION
 -------------
 
@@ -38,18 +60,17 @@ Variables
 imap.folder::
 	The folder to drop the mails into, which is typically the Drafts
 	folder. For example: "INBOX.Drafts", "INBOX/Drafts" or
-	"[Gmail]/Drafts". Required to use imap-send.
+	"[Gmail]/Drafts". Required.
 
 imap.tunnel::
 	Command used to setup a tunnel to the IMAP server through which
 	commands will be piped instead of using a direct network connection
-	to the server. Required when imap.host is not set to use imap-send.
+	to the server. Required when imap.host is not set.
 
 imap.host::
 	A URL identifying the server. Use a `imap://` prefix for non-secure
 	connections and a `imaps://` prefix for secure connections.
-	Ignored when imap.tunnel is set, but required to use imap-send
-	otherwise.
+	Ignored when imap.tunnel is set, but required otherwise.
 
 imap.user::
 	The username to use when logging in to the server.
@@ -76,7 +97,10 @@ imap.preformattedHTML::
 
 imap.authMethod::
 	Specify authenticate method for authentication with IMAP server.
-	Current supported method is 'CRAM-MD5' only.
+	If Git was built with the NO_CURL option, or if your curl version is older
+	than 7.34.0, or if you're running git-imap-send with the `--no-curl`
+	option, the only supported method is 'CRAM-MD5'. If this is not set
+	then 'git imap-send' uses the basic IMAP plaintext LOGIN command.
 
 Examples
 ~~~~~~~~
@@ -97,7 +121,7 @@ Using direct mode:
     host = imap://imap.example.com
     user = bob
     pass = p4ssw0rd
-..........................
+.........................
 
 Using direct mode with SSL:
 
@@ -109,7 +133,7 @@ Using direct mode with SSL:
     pass = p4ssw0rd
     port = 123
     sslverify = false
-..........................
+.........................
 
 
 EXAMPLE

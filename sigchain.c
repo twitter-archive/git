@@ -1,5 +1,5 @@
-#include "sigchain.h"
 #include "cache.h"
+#include "sigchain.h"
 
 #define SIGCHAIN_MAX_SIGNALS 32
 
@@ -49,4 +49,13 @@ void sigchain_push_common(sigchain_fun f)
 	sigchain_push(SIGTERM, f);
 	sigchain_push(SIGQUIT, f);
 	sigchain_push(SIGPIPE, f);
+}
+
+void sigchain_pop_common(void)
+{
+	sigchain_pop(SIGPIPE);
+	sigchain_pop(SIGQUIT);
+	sigchain_pop(SIGTERM);
+	sigchain_pop(SIGHUP);
+	sigchain_pop(SIGINT);
 }

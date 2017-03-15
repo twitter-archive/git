@@ -57,11 +57,8 @@ static int verify_packfile(struct packed_git *p,
 	int err = 0;
 	struct idx_entry *entries;
 
-	/* Note that the pack header checks are actually performed by
-	 * use_pack when it first opens the pack file.  If anything
-	 * goes wrong during those checks then the call will die out
-	 * immediately.
-	 */
+	if (!is_pack_valid(p))
+		return error("packfile %s cannot be accessed", p->pack_name);
 
 	git_SHA1_Init(&ctx);
 	do {
@@ -89,7 +86,7 @@ static int verify_packfile(struct packed_git *p,
 	 * we do not do scan-streaming check on the pack file.
 	 */
 	nr_objects = p->num_objects;
-	entries = xmalloc((nr_objects + 1) * sizeof(*entries));
+	ALLOC_ARRAY(entries, nr_objects + 1);
 	entries[nr_objects].offset = pack_sig_ofs;
 	/* first sort entries by pack offset, since unpacking them is more efficient that way */
 	for (i = 0; i < nr_objects; i++) {
@@ -99,12 +96,14 @@ static int verify_packfile(struct packed_git *p,
 		entries[i].offset = nth_packed_object_offset(p, i);
 		entries[i].nr = i;
 	}
-	qsort(entries, nr_objects, sizeof(*entries), compare_entries);
+	QSORT(entries, nr_objects, compare_entries);
 
 	for (i = 0; i < nr_objects; i++) {
 		void *data;
 		enum object_type type;
 		unsigned long size;
+		off_t curpos;
+		int data_valid;
 
 		if (p->index_version > 1) {
 			off_t offset = entries[i].offset;
@@ -116,8 +115,25 @@ static int verify_packfile(struct packed_git *p,
 					    sha1_to_hex(entries[i].sha1),
 					    p->pack_name, (uintmax_t)offset);
 		}
-		data = unpack_entry(p, entries[i].offset, &type, &size);
-		if (!data)
+
+		curpos = entries[i].offset;
+		type = unpack_object_header(p, w_curs, &curpos, &size);
+		unuse_pack(w_curs);
+
+		if (type == OBJ_BLOB && big_file_threshold <= size) {
+			/*
+			 * Let check_sha1_signature() check it with
+			 * the streaming interface; no point slurping
+			 * the data in-core only to discard.
+			 */
+			data = NULL;
+			data_valid = 0;
+		} else {
+			data = unpack_entry(p, entries[i].offset, &type, &size);
+			data_valid = 1;
+		}
+
+		if (data_valid && !data)
 			err = error("cannot unpack %s from %s at offset %"PRIuMAX"",
 				    sha1_to_hex(entries[i].sha1), p->pack_name,
 				    (uintmax_t)entries[i].offset);
@@ -126,7 +142,7 @@ static int verify_packfile(struct packed_git *p,
 				    sha1_to_hex(entries[i].sha1), p->pack_name);
 		else if (fn) {
 			int eaten = 0;
-			fn(entries[i].sha1, type, size, data, &eaten);
+			err |= fn(entries[i].sha1, type, size, data, &eaten);
 			if (eaten)
 				data = NULL;
 		}

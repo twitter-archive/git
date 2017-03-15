@@ -5,6 +5,7 @@
  */
 #include "cache.h"
 #include "builtin.h"
+#include "lockfile.h"
 #include "dir.h"
 #include "pathspec.h"
 #include "exec_cmd.h"
@@ -15,9 +16,10 @@
 #include "diffcore.h"
 #include "revision.h"
 #include "bulk-checkin.h"
+#include "argv-array.h"
 
 static const char * const builtin_add_usage[] = {
-	N_("git add [options] [--] <pathspec>..."),
+	N_("git add [<options>] [--] <pathspec>..."),
 	NULL
 };
 static int patch_interactive, add_interactive, edit_interactive;
@@ -27,6 +29,21 @@ struct update_callback_data {
 	int flags;
 	int add_errors;
 };
+
+static void chmod_pathspec(struct pathspec *pathspec, int force_mode)
+{
+	int i;
+
+	for (i = 0; i < active_nr; i++) {
+		struct cache_entry *ce = active_cache[i];
+
+		if (pathspec && !ce_path_match(ce, pathspec, NULL))
+			continue;
+
+		if (chmod_cache_entry(ce, force_mode) < 0)
+			fprintf(stderr, "cannot chmod '%s'", ce->name);
+	}
+}
 
 static int fix_unmerged_status(struct diff_filepair *p,
 			       struct update_callback_data *data)
@@ -63,7 +80,7 @@ static void update_callback(struct diff_queue_struct *q,
 			die(_("unexpected diff status %c"), p->status);
 		case DIFF_STATUS_MODIFIED:
 		case DIFF_STATUS_TYPE_CHANGED:
-			if (add_file_to_index(&the_index, path, data->flags)) {
+			if (add_file_to_index(&the_index, path,	data->flags)) {
 				if (!(data->flags & ADD_CACHE_IGNORE_ERRORS))
 					die(_("updating files failed"));
 				data->add_errors++;
@@ -141,23 +158,21 @@ static void refresh(int verbose, const struct pathspec *pathspec)
 int run_add_interactive(const char *revision, const char *patch_mode,
 			const struct pathspec *pathspec)
 {
-	int status, ac, i;
-	const char **args;
+	int status, i;
+	struct argv_array argv = ARGV_ARRAY_INIT;
 
-	args = xcalloc(sizeof(const char *), (pathspec->nr + 6));
-	ac = 0;
-	args[ac++] = "add--interactive";
+	argv_array_push(&argv, "add--interactive");
 	if (patch_mode)
-		args[ac++] = patch_mode;
+		argv_array_push(&argv, patch_mode);
 	if (revision)
-		args[ac++] = revision;
-	args[ac++] = "--";
+		argv_array_push(&argv, revision);
+	argv_array_push(&argv, "--");
 	for (i = 0; i < pathspec->nr; i++)
 		/* pass original pathspec, to be re-parsed */
-		args[ac++] = pathspec->items[i].original;
+		argv_array_push(&argv, pathspec->items[i].original);
 
-	status = run_command_v_opt(args, RUN_GIT_CMD);
-	free(args);
+	status = run_command_v_opt(argv.argv, RUN_GIT_CMD);
+	argv_array_clear(&argv);
 	return status;
 }
 
@@ -181,7 +196,7 @@ static int edit_patch(int argc, const char **argv, const char *prefix)
 	char *file = git_pathdup("ADD_EDIT.patch");
 	const char *apply_argv[] = { "apply", "--recount", "--cached",
 		NULL, NULL };
-	struct child_process child;
+	struct child_process child = CHILD_PROCESS_INIT;
 	struct rev_info rev;
 	int out;
 	struct stat st;
@@ -208,14 +223,14 @@ static int edit_patch(int argc, const char **argv, const char *prefix)
 	if (run_diff_files(&rev, 0))
 		die(_("Could not write patch"));
 
-	launch_editor(file, NULL, NULL);
+	if (launch_editor(file, NULL, NULL))
+		die(_("editing patch failed"));
 
 	if (stat(file, &st))
 		die_errno(_("Could not stat '%s'"), file);
 	if (!st.st_size)
 		die(_("Empty patch. Aborted."));
 
-	memset(&child, 0, sizeof(child));
 	child.git_cmd = 1;
 	child.argv = apply_argv;
 	if (run_command(&child))
@@ -237,6 +252,8 @@ static int ignore_add_errors, intent_to_add, ignore_missing;
 #define ADDREMOVE_DEFAULT 1
 static int addremove = ADDREMOVE_DEFAULT;
 static int addremove_explicit = -1; /* unspecified */
+
+static char *chmod_arg;
 
 static int ignore_removal_cb(const struct option *opt, const char *arg, int unset)
 {
@@ -263,6 +280,7 @@ static struct option builtin_add_options[] = {
 	OPT_BOOL( 0 , "refresh", &refresh_only, N_("don't add, only refresh the index")),
 	OPT_BOOL( 0 , "ignore-errors", &ignore_add_errors, N_("just skip files which cannot be added because of errors")),
 	OPT_BOOL( 0 , "ignore-missing", &ignore_missing, N_("check if - even missing - files are ignored in dry run")),
+	OPT_STRING( 0 , "chmod", &chmod_arg, N_("(+/-)x"), N_("override the executable bit of the listed files")),
 	OPT_END(),
 };
 
@@ -285,11 +303,11 @@ static int add_files(struct dir_struct *dir, int flags)
 		for (i = 0; i < dir->ignored_nr; i++)
 			fprintf(stderr, "%s\n", dir->ignored[i]->name);
 		fprintf(stderr, _("Use -f if you really want to add them.\n"));
-		die(_("no files added"));
+		exit_status = 1;
 	}
 
 	for (i = 0; i < dir->nr; i++)
-		if (add_file_to_cache(dir->entries[i]->name, flags)) {
+		if (add_file_to_index(&the_index, dir->entries[i]->name, flags)) {
 			if (!ignore_add_errors)
 				die(_("adding files failed"));
 			exit_status = 1;
@@ -300,7 +318,6 @@ static int add_files(struct dir_struct *dir, int flags)
 int cmd_add(int argc, const char **argv, const char *prefix)
 {
 	int exit_status = 0;
-	int newfd;
 	struct pathspec pathspec;
 	struct dir_struct dir;
 	int flags;
@@ -337,16 +354,14 @@ int cmd_add(int argc, const char **argv, const char *prefix)
 	if (!show_only && ignore_missing)
 		die(_("Option --ignore-missing can only be used together with --dry-run"));
 
-	if ((0 < addremove_explicit || take_worktree_changes) && !argc) {
-		static const char *whole[2] = { ":/", NULL };
-		argc = 1;
-		argv = whole;
-	}
+	if (chmod_arg && ((chmod_arg[0] != '-' && chmod_arg[0] != '+') ||
+			  chmod_arg[1] != 'x' || chmod_arg[2]))
+		die(_("--chmod param '%s' must be either -x or +x"), chmod_arg);
 
 	add_new_files = !take_worktree_changes && !refresh_only;
-	require_pathspec = !take_worktree_changes;
+	require_pathspec = !(take_worktree_changes || (0 < addremove_explicit));
 
-	newfd = hold_locked_index(&lock_file, 1);
+	hold_locked_index(&lock_file, LOCK_DIE_ON_ERROR);
 
 	flags = ((verbose ? ADD_CACHE_VERBOSE : 0) |
 		 (show_only ? ADD_CACHE_PRETEND : 0) |
@@ -376,7 +391,6 @@ int cmd_add(int argc, const char **argv, const char *prefix)
 
 	if (add_new_files) {
 		int baselen;
-		struct pathspec empty_pathspec;
 
 		/* Set up the default git porcelain excludes */
 		memset(&dir, 0, sizeof(dir));
@@ -385,7 +399,6 @@ int cmd_add(int argc, const char **argv, const char *prefix)
 			setup_standard_excludes(&dir);
 		}
 
-		memset(&empty_pathspec, 0, sizeof(empty_pathspec));
 		/* This picks up the paths that are not tracked */
 		baselen = fill_directory(&dir, &pathspec);
 		if (pathspec.nr)
@@ -440,12 +453,13 @@ int cmd_add(int argc, const char **argv, const char *prefix)
 	if (add_new_files)
 		exit_status |= add_files(&dir, flags);
 
+	if (chmod_arg && pathspec.nr)
+		chmod_pathspec(&pathspec, chmod_arg[0]);
 	unplug_bulk_checkin();
 
 finish:
 	if (active_cache_changed) {
-		if (write_cache(newfd, active_cache, active_nr) ||
-		    commit_locked_index(&lock_file))
+		if (write_locked_index(&the_index, &lock_file, COMMIT_LOCK))
 			die(_("Unable to write new index file"));
 	}
 

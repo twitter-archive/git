@@ -51,7 +51,7 @@ run_status () {
 		export GIT_INDEX_FILE
 	fi
 
-	if test "$status_only" = "t" -o "$use_status_color" = "t"; then
+	if test "$status_only" = "t" || test "$use_status_color" = "t"; then
 		color=
 	else
 		color=--nocolor
@@ -91,7 +91,7 @@ signoff=
 force_author=
 only_include_assumed=
 untracked_files=
-templatefile="`git config commit.template`"
+templatefile="$(git config commit.template)"
 while test $# != 0
 do
 	case "$1" in
@@ -280,7 +280,7 @@ case "$#,$also,$only,$amend" in
 0,,,*)
 	;;
 *,,,*)
-	only_include_assumed="# Explicit paths specified without -i nor -o; assuming --only paths..."
+	only_include_assumed="# Explicit paths specified without -i or -o; assuming --only paths..."
 	also=
 	;;
 esac
@@ -296,7 +296,7 @@ t,,,[1-9]*)
 	die "No paths with -i does not make sense." ;;
 esac
 
-if test ! -z "$templatefile" -a -z "$log_given"
+if test ! -z "$templatefile" && test -z "$log_given"
 then
 	if test ! -f "$templatefile"
 	then
@@ -350,7 +350,7 @@ t,)
 		TMP_INDEX="$GIT_DIR/tmp-index$$"
 		W=
 		test -z "$initial_commit" && W=--with-tree=HEAD
-		commit_only=`git ls-files --error-unmatch $W -- "$@"` || exit
+		commit_only=$(git ls-files --error-unmatch $W -- "$@") || exit
 
 		# Build a temporary index and update the real index
 		# the same way.
@@ -475,8 +475,8 @@ then
 fi
 if test '' != "$force_author"
 then
-	GIT_AUTHOR_NAME=`expr "z$force_author" : 'z\(.*[^ ]\) *<.*'` &&
-	GIT_AUTHOR_EMAIL=`expr "z$force_author" : '.*\(<.*\)'` &&
+	GIT_AUTHOR_NAME=$(expr "z$force_author" : 'z\(.*[^ ]\) *<.*') &&
+	GIT_AUTHOR_EMAIL=$(expr "z$force_author" : '.*\(<.*\)') &&
 	test '' != "$GIT_AUTHOR_NAME" &&
 	test '' != "$GIT_AUTHOR_EMAIL" ||
 	die "malformed --author parameter"
@@ -489,7 +489,7 @@ then
 	rloga='commit'
 	if [ -f "$GIT_DIR/MERGE_HEAD" ]; then
 		rloga='commit (merge)'
-		PARENTS="-p HEAD "`sed -e 's/^/-p /' "$GIT_DIR/MERGE_HEAD"`
+		PARENTS="-p HEAD "$(sed -e 's/^/-p /' "$GIT_DIR/MERGE_HEAD")
 	elif test -n "$amend"; then
 		rloga='commit (amend)'
 		PARENTS=$(git cat-file commit HEAD |
@@ -574,10 +574,10 @@ then
 	if test "$templatefile" != ""
 	then
 		# Test whether this is just the unaltered template.
-		if cnt=`sed -e '/^#/d' < "$templatefile" |
+		if cnt=$(sed -e '/^#/d' < "$templatefile" |
 			git stripspace |
 			diff "$GIT_DIR"/COMMIT_BAREMSG - |
-			wc -l` &&
+			wc -l) &&
 		   test 0 -lt $cnt
 		then
 			have_commitmsg=t
@@ -630,8 +630,8 @@ then
 	fi
 	if test -z "$quiet"
 	then
-		commit=`git diff-tree --always --shortstat --pretty="format:%h: %s"\
-		       --abbrev --summary --root HEAD --`
+		commit=$(git diff-tree --always --shortstat --pretty="format:%h: %s"\
+		       --abbrev --summary --root HEAD --)
 		echo "Created${initial_commit:+ initial} commit $commit"
 	fi
 fi

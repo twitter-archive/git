@@ -3,13 +3,13 @@ git-describe(1)
 
 NAME
 ----
-git-describe - Show the most recent tag that is reachable from a commit
+git-describe - Describe a commit using the most recent tag reachable from it
 
 
 SYNOPSIS
 --------
 [verse]
-'git describe' [--all] [--tags] [--contains] [--abbrev=<n>] <commit-ish>...
+'git describe' [--all] [--tags] [--contains] [--abbrev=<n>] [<commit-ish>...]
 'git describe' [--all] [--tags] [--contains] [--abbrev=<n>] --dirty[=<mark>]
 
 DESCRIPTION
@@ -27,7 +27,7 @@ see the -a and -s options to linkgit:git-tag[1].
 OPTIONS
 -------
 <commit-ish>...::
-	Commit-ish object names to describe.
+	Commit-ish object names to describe.  Defaults to HEAD if omitted.
 
 --dirty[=<mark>]::
 	Describe the working tree.
@@ -83,7 +83,20 @@ OPTIONS
 --match <pattern>::
 	Only consider tags matching the given `glob(7)` pattern,
 	excluding the "refs/tags/" prefix.  This can be used to avoid
-	leaking private tags from the repository.
+	leaking private tags from the repository. If given multiple times, a
+	list of patterns will be accumulated, and tags matching any of the
+	patterns will be considered. Use `--no-match` to clear and reset the
+	list of patterns.
+
+--exclude <pattern>::
+	Do not consider tags matching the given `glob(7)` pattern, excluding
+	the "refs/tags/" prefix. This can be used to narrow the tag space and
+	find only tags matching some meaningful criteria. If given multiple
+	times, a list of patterns will be accumulated and tags matching any
+	of the patterns will be excluded. When combined with --match a tag will
+	be considered when it matches at least one --match pattern and does not
+	match any of the --exclude patterns. Use `--no-exclude` to clear and
+	reset the list of patterns.
 
 --always::
 	Show uniquely abbreviated commit object as fallback.
@@ -154,7 +167,7 @@ is found, its name will be output and searching will stop.
 If an exact match was not found, 'git describe' will walk back
 through the commit history to locate an ancestor commit which
 has been tagged.  The ancestor's tag will be output along with an
-abbreviation of the input commit-ish's SHA-1. If '--first-parent' was
+abbreviation of the input commit-ish's SHA-1. If `--first-parent` was
 specified then the walk will only consider the first parent of each
 commit.
 

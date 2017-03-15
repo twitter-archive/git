@@ -7,7 +7,7 @@ test_description='Per branch config variables affects "git fetch".
 
 . ./test-lib.sh
 
-D=`pwd`
+D=$(pwd)
 
 test_bundle_object_count () {
 	git verify-pack -v "$1" >verify.out &&
@@ -64,8 +64,8 @@ test_expect_success "fetch test" '
 	cd two &&
 	git fetch &&
 	test -f .git/refs/heads/one &&
-	mine=`git rev-parse refs/heads/one` &&
-	his=`cd ../one && git rev-parse refs/heads/master` &&
+	mine=$(git rev-parse refs/heads/one) &&
+	his=$(cd ../one && git rev-parse refs/heads/master) &&
 	test "z$mine" = "z$his"
 '
 
@@ -75,8 +75,8 @@ test_expect_success "fetch test for-merge" '
 	git fetch &&
 	test -f .git/refs/heads/two &&
 	test -f .git/refs/heads/one &&
-	master_in_two=`cd ../two && git rev-parse master` &&
-	one_in_two=`cd ../two && git rev-parse one` &&
+	master_in_two=$(cd ../two && git rev-parse master) &&
+	one_in_two=$(cd ../two && git rev-parse one) &&
 	{
 		echo "$one_in_two	"
 		echo "$master_in_two	not-for-merge"
@@ -111,6 +111,26 @@ test_expect_success 'fetch --prune with a namespace keeps other namespaces' '
 
 	git fetch --prune origin refs/heads/a/*:refs/remotes/origin/a/* &&
 	git rev-parse origin/master
+'
+
+test_expect_success 'fetch --prune handles overlapping refspecs' '
+	cd "$D" &&
+	git update-ref refs/pull/42/head master &&
+	git clone . prune-overlapping &&
+	cd prune-overlapping &&
+	git config --add remote.origin.fetch refs/pull/*/head:refs/remotes/origin/pr/* &&
+
+	git fetch --prune origin &&
+	git rev-parse origin/master &&
+	git rev-parse origin/pr/42 &&
+
+	git config --unset-all remote.origin.fetch &&
+	git config remote.origin.fetch refs/pull/*/head:refs/remotes/origin/pr/* &&
+	git config --add remote.origin.fetch refs/heads/*:refs/remotes/origin/* &&
+
+	git fetch --prune origin &&
+	git rev-parse origin/master &&
+	git rev-parse origin/pr/42
 '
 
 test_expect_success 'fetch --prune --tags prunes branches but not tags' '
@@ -294,42 +314,6 @@ test_expect_success 'bundle should be able to create a full history' '
 
 '
 
-! rsync --help > /dev/null 2> /dev/null &&
-say 'Skipping rsync tests because rsync was not found' || {
-test_expect_success 'fetch via rsync' '
-	git pack-refs &&
-	mkdir rsynced &&
-	(cd rsynced &&
-	 git init --bare &&
-	 git fetch "rsync:$(pwd)/../.git" master:refs/heads/master &&
-	 git gc --prune &&
-	 test $(git rev-parse master) = $(cd .. && git rev-parse master) &&
-	 git fsck --full)
-'
-
-test_expect_success 'push via rsync' '
-	mkdir rsynced2 &&
-	(cd rsynced2 &&
-	 git init) &&
-	(cd rsynced &&
-	 git push "rsync:$(pwd)/../rsynced2/.git" master) &&
-	(cd rsynced2 &&
-	 git gc --prune &&
-	 test $(git rev-parse master) = $(cd .. && git rev-parse master) &&
-	 git fsck --full)
-'
-
-test_expect_success 'push via rsync' '
-	mkdir rsynced3 &&
-	(cd rsynced3 &&
-	 git init) &&
-	git push --all "rsync:$(pwd)/rsynced3/.git" &&
-	(cd rsynced3 &&
-	 test $(git rev-parse master) = $(cd .. && git rev-parse master) &&
-	 git fsck --full)
-'
-}
-
 test_expect_success 'fetch with a non-applying branch.<name>.merge' '
 	git config branch.master.remote yeti &&
 	git config branch.master.merge refs/heads/bigfoot &&
@@ -423,6 +407,43 @@ test_expect_success 'explicit pull should update tracking' '
 		git pull origin master &&
 		n=$(git rev-parse --verify refs/remotes/origin/master) &&
 		test "$o" != "$n" &&
+		test_must_fail git rev-parse --verify refs/remotes/origin/side
+	)
+'
+
+test_expect_success 'explicit --refmap is allowed only with command-line refspec' '
+	cd "$D" &&
+	(
+		cd three &&
+		test_must_fail git fetch --refmap="*:refs/remotes/none/*"
+	)
+'
+
+test_expect_success 'explicit --refmap option overrides remote.*.fetch' '
+	cd "$D" &&
+	git branch -f side &&
+	(
+		cd three &&
+		git update-ref refs/remotes/origin/master base-origin-master &&
+		o=$(git rev-parse --verify refs/remotes/origin/master) &&
+		git fetch --refmap="refs/heads/*:refs/remotes/other/*" origin master &&
+		n=$(git rev-parse --verify refs/remotes/origin/master) &&
+		test "$o" = "$n" &&
+		test_must_fail git rev-parse --verify refs/remotes/origin/side &&
+		git rev-parse --verify refs/remotes/other/master
+	)
+'
+
+test_expect_success 'explicitly empty --refmap option disables remote.*.fetch' '
+	cd "$D" &&
+	git branch -f side &&
+	(
+		cd three &&
+		git update-ref refs/remotes/origin/master base-origin-master &&
+		o=$(git rev-parse --verify refs/remotes/origin/master) &&
+		git fetch --refmap="" origin master &&
+		n=$(git rev-parse --verify refs/remotes/origin/master) &&
+		test "$o" = "$n" &&
 		test_must_fail git rev-parse --verify refs/remotes/origin/side
 	)
 '
@@ -539,7 +560,7 @@ test_configured_prune () {
 			test_unconfig remote.origin.prune &&
 			git fetch &&
 			git rev-parse --verify refs/remotes/origin/newbranch
-		)
+		) &&
 
 		# now remove it
 		git branch -d newbranch &&
@@ -623,7 +644,7 @@ test_expect_success 'fetch --prune prints the remotes url' '
 		git fetch --prune origin 2>&1 | head -n1 >../actual
 	) &&
 	echo "From ${D}/." >expect &&
-	test_cmp expect actual
+	test_i18ncmp expect actual
 '
 
 test_expect_success 'branchname D/F conflict resolved by --prune' '
@@ -649,6 +670,52 @@ test_expect_success 'fetching a one-level ref works' '
 		cd one-level &&
 		git fetch .. HEAD refs/foo
 	)
+'
+
+test_expect_success 'fetching with auto-gc does not lock up' '
+	write_script askyesno <<-\EOF &&
+	echo "$*" &&
+	false
+	EOF
+	git clone "file://$D" auto-gc &&
+	test_commit test2 &&
+	(
+		cd auto-gc &&
+		git config gc.autoPackLimit 1 &&
+		git config gc.autoDetach false &&
+		GIT_ASK_YESNO="$D/askyesno" git fetch >fetch.out 2>&1 &&
+		! grep "Should I try again" fetch.out
+	)
+'
+
+test_expect_success C_LOCALE_OUTPUT 'fetch aligned output' '
+	git clone . full-output &&
+	test_commit looooooooooooong-tag &&
+	(
+		cd full-output &&
+		git -c fetch.output=full fetch origin 2>&1 | \
+			grep -e "->" | cut -c 22- >../actual
+	) &&
+	cat >expect <<-\EOF &&
+	master               -> origin/master
+	looooooooooooong-tag -> looooooooooooong-tag
+	EOF
+	test_cmp expect actual
+'
+
+test_expect_success C_LOCALE_OUTPUT 'fetch compact output' '
+	git clone . compact &&
+	test_commit extraaa &&
+	(
+		cd compact &&
+		git -c fetch.output=compact fetch origin 2>&1 | \
+			grep -e "->" | cut -c 22- >../actual
+	) &&
+	cat >expect <<-\EOF &&
+	master     -> origin/*
+	extraaa    -> *
+	EOF
+	test_cmp expect actual
 '
 
 test_done

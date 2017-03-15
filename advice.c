@@ -61,8 +61,11 @@ void advise(const char *advice, ...)
 
 int git_default_advice_config(const char *var, const char *value)
 {
-	const char *k = skip_prefix(var, "advice.");
+	const char *k;
 	int i;
+
+	if (!skip_prefix(var, "advice.", &k))
+		return 0;
 
 	for (i = 0; i < ARRAY_SIZE(advice_config); i++) {
 		if (strcmp(k, advice_config[i].name))
@@ -76,35 +79,54 @@ int git_default_advice_config(const char *var, const char *value)
 
 int error_resolve_conflict(const char *me)
 {
-	error("'%s' is not possible because you have unmerged files.", me);
+	if (!strcmp(me, "cherry-pick"))
+		error(_("Cherry-picking is not possible because you have unmerged files."));
+	else if (!strcmp(me, "commit"))
+		error(_("Committing is not possible because you have unmerged files."));
+	else if (!strcmp(me, "merge"))
+		error(_("Merging is not possible because you have unmerged files."));
+	else if (!strcmp(me, "pull"))
+		error(_("Pulling is not possible because you have unmerged files."));
+	else if (!strcmp(me, "revert"))
+		error(_("Reverting is not possible because you have unmerged files."));
+	else
+		error(_("It is not possible to %s because you have unmerged files."),
+			me);
+
 	if (advice_resolve_conflict)
 		/*
 		 * Message used both when 'git commit' fails and when
 		 * other commands doing a merge do.
 		 */
-		advise(_("Fix them up in the work tree,\n"
-			 "and then use 'git add/rm <file>' as\n"
-			 "appropriate to mark resolution and make a commit,\n"
-			 "or use 'git commit -a'."));
+		advise(_("Fix them up in the work tree, and then use 'git add/rm <file>'\n"
+			 "as appropriate to mark resolution and make a commit."));
 	return -1;
 }
 
 void NORETURN die_resolve_conflict(const char *me)
 {
 	error_resolve_conflict(me);
-	die("Exiting because of an unresolved conflict.");
+	die(_("Exiting because of an unresolved conflict."));
+}
+
+void NORETURN die_conclude_merge(void)
+{
+	error(_("You have not concluded your merge (MERGE_HEAD exists)."));
+	if (advice_resolve_conflict)
+		advise(_("Please, commit your changes before merging."));
+	die(_("Exiting because of unfinished merge."));
 }
 
 void detach_advice(const char *new_name)
 {
-	const char fmt[] =
-	"Note: checking out '%s'.\n\n"
+	const char *fmt =
+	_("Note: checking out '%s'.\n\n"
 	"You are in 'detached HEAD' state. You can look around, make experimental\n"
 	"changes and commit them, and you can discard any commits you make in this\n"
 	"state without impacting any branches by performing another checkout.\n\n"
 	"If you want to create a new branch to retain commits you create, you may\n"
 	"do so (now or later) by using -b with the checkout command again. Example:\n\n"
-	"  git checkout -b new_branch_name\n\n";
+	"  git checkout -b <new-branch-name>\n\n");
 
 	fprintf(stderr, fmt, new_name);
 }

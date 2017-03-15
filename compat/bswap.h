@@ -101,19 +101,38 @@ static inline uint64_t git_bswap64(uint64_t x)
 #undef ntohll
 #undef htonll
 
-#if !defined(__BYTE_ORDER)
-# if defined(BYTE_ORDER) && defined(LITTLE_ENDIAN) && defined(BIG_ENDIAN)
-#  define __BYTE_ORDER BYTE_ORDER
-#  define __LITTLE_ENDIAN LITTLE_ENDIAN
-#  define __BIG_ENDIAN BIG_ENDIAN
+#if defined(__BYTE_ORDER) && defined(__LITTLE_ENDIAN) && defined(__BIG_ENDIAN)
+
+# define GIT_BYTE_ORDER __BYTE_ORDER
+# define GIT_LITTLE_ENDIAN __LITTLE_ENDIAN
+# define GIT_BIG_ENDIAN __BIG_ENDIAN
+
+#elif defined(BYTE_ORDER) && defined(LITTLE_ENDIAN) && defined(BIG_ENDIAN)
+
+# define GIT_BYTE_ORDER BYTE_ORDER
+# define GIT_LITTLE_ENDIAN LITTLE_ENDIAN
+# define GIT_BIG_ENDIAN BIG_ENDIAN
+
+#else
+
+# define GIT_BIG_ENDIAN 4321
+# define GIT_LITTLE_ENDIAN 1234
+
+# if defined(_BIG_ENDIAN) && !defined(_LITTLE_ENDIAN)
+#  define GIT_BYTE_ORDER GIT_BIG_ENDIAN
+# elif defined(_LITTLE_ENDIAN) && !defined(_BIG_ENDIAN)
+#  define GIT_BYTE_ORDER GIT_LITTLE_ENDIAN
+# elif defined(__THW_BIG_ENDIAN__) && !defined(__THW_LITTLE_ENDIAN__)
+#  define GIT_BYTE_ORDER GIT_BIG_ENDIAN
+# elif defined(__THW_LITTLE_ENDIAN__) && !defined(__THW_BIG_ENDIAN__)
+#  define GIT_BYTE_ORDER GIT_LITTLE_ENDIAN
+# else
+#  error "Cannot determine endianness"
 # endif
+
 #endif
 
-#if !defined(__BYTE_ORDER)
-# error "Cannot determine endianness"
-#endif
-
-#if __BYTE_ORDER == __BIG_ENDIAN
+#if GIT_BYTE_ORDER == GIT_BIG_ENDIAN
 # define ntohll(n) (n)
 # define htonll(n) (n)
 #else
@@ -130,11 +149,12 @@ static inline uint64_t git_bswap64(uint64_t x)
  * and is faster on architectures with memory alignment issues.
  */
 
-#if defined(__i386__) || defined(__x86_64__) || \
+#if !defined(NO_UNALIGNED_LOADS) && ( \
+    defined(__i386__) || defined(__x86_64__) || \
     defined(_M_IX86) || defined(_M_X64) || \
     defined(__ppc__) || defined(__ppc64__) || \
     defined(__powerpc__) || defined(__powerpc64__) || \
-    defined(__s390__) || defined(__s390x__)
+    defined(__s390__) || defined(__s390x__))
 
 #define get_be16(p)	ntohs(*(unsigned short *)(p))
 #define get_be32(p)	ntohl(*(unsigned int *)(p))

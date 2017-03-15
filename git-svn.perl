@@ -11,14 +11,10 @@ $AUTHOR = 'Eric Wong <normalperson@yhbt.net>';
 $VERSION = '@@GIT_VERSION@@';
 
 use Carp qw/croak/;
-use Digest::MD5;
-use IO::File qw//;
 use File::Basename qw/dirname basename/;
 use File::Path qw/mkpath/;
 use File::Spec;
-use File::Find;
 use Getopt::Long qw/:config gnu_getopt no_ignore_case auto_abbrev/;
-use IPC::Open3;
 use Memoize;
 
 use Git::SVN;
@@ -48,6 +44,7 @@ use Git qw(
 	command_close_pipe
 	command_bidi_pipe
 	command_close_bidi_pipe
+	get_record
 );
 
 BEGIN {
@@ -115,7 +112,7 @@ my ($_stdin, $_help, $_edit,
 	$_before, $_after,
 	$_merge, $_strategy, $_preserve_merges, $_dry_run, $_parents, $_local,
 	$_prefix, $_no_checkout, $_url, $_verbose,
-	$_commit_url, $_tag, $_merge_info, $_interactive);
+	$_commit_url, $_tag, $_merge_info, $_interactive, $_set_svn_props);
 
 # This is a refactoring artifact so Git::SVN can get at this git-svn switch.
 sub opt_prefix { return $_prefix || '' }
@@ -193,6 +190,7 @@ my %cmd = (
 			  'dry-run|n' => \$_dry_run,
 			  'fetch-all|all' => \$_fetch_all,
 			  'commit-url=s' => \$_commit_url,
+			  'set-svn-props=s' => \$_set_svn_props,
 			  'revision|r=i' => \$_revision,
 			  'no-rebase' => \$_no_rebase,
 			  'mergeinfo=s' => \$_merge_info,
@@ -228,6 +226,9 @@ my %cmd = (
         'propget' => [ \&cmd_propget,
 		       'Print the value of a property on a file or directory',
 		       { 'revision|r=i' => \$_revision } ],
+        'propset' => [ \&cmd_propset,
+		       'Set the value of a property on a file or directory - will be set on commit',
+		       {} ],
         'proplist' => [ \&cmd_proplist,
 		       'List all properties of a file or directory',
 		       { 'revision|r=i' => \$_revision } ],
@@ -260,8 +261,8 @@ my %cmd = (
 			} ],
 	'find-rev' => [ \&cmd_find_rev,
 	                "Translate between SVN revision numbers and tree-ish",
-			{ 'before' => \$_before,
-			  'after' => \$_after } ],
+			{ 'B|before' => \$_before,
+			  'A|after' => \$_after } ],
 	'rebase' => [ \&cmd_rebase, "Fetch and rebase your working directory",
 			{ 'merge|m|M' => \$_merge,
 			  'verbose|v' => \$_verbose,
@@ -294,7 +295,6 @@ my %cmd = (
 		{} ],
 );
 
-use Term::ReadLine;
 package FakeTerm;
 sub new {
 	my ($class, $reason) = @_;
@@ -306,13 +306,17 @@ sub readline {
 }
 package main;
 
-my $term = eval {
-	$ENV{"GIT_SVN_NOTTY"}
-		? new Term::ReadLine 'git-svn', \*STDIN, \*STDOUT
-		: new Term::ReadLine 'git-svn';
-};
-if ($@) {
-	$term = new FakeTerm "$@: going non-interactive";
+my $term;
+sub term_init {
+	$term = eval {
+		require Term::ReadLine;
+		$ENV{"GIT_SVN_NOTTY"}
+			? new Term::ReadLine 'git-svn', \*STDIN, \*STDOUT
+			: new Term::ReadLine 'git-svn';
+	};
+	if ($@) {
+		$term = new FakeTerm "$@: going non-interactive";
+	}
 }
 
 my $cmd;
@@ -330,7 +334,13 @@ for (my $i = 0; $i < @ARGV; $i++) {
 # make sure we're always running at the top-level working directory
 if ($cmd && $cmd =~ /(?:clone|init|multi-init)$/) {
 	$ENV{GIT_DIR} ||= ".git";
-} else {
+	# catch the submodule case
+	if (-f $ENV{GIT_DIR}) {
+		open(my $fh, '<', $ENV{GIT_DIR}) or
+			die "failed to open $ENV{GIT_DIR}: $!\n";
+		$ENV{GIT_DIR} = $1 if <$fh> =~ /^gitdir: (.+)$/;
+	}
+} elsif ($cmd) {
 	my ($git_dir, $cdup);
 	git_cmd_try {
 		$git_dir = command_oneline([qw/rev-parse --git-dir/]);
@@ -347,7 +357,7 @@ if ($cmd && $cmd =~ /(?:clone|init|multi-init)$/) {
 
 my %opts = %{$cmd{$cmd}->[2]} if (defined $cmd);
 
-read_git_config(\%opts);
+read_git_config(\%opts) if $ENV{GIT_DIR};
 if ($cmd && ($cmd eq 'log' || $cmd eq 'blame')) {
 	Getopt::Long::Configure('pass_through');
 }
@@ -424,6 +434,7 @@ sub ask {
 	my $default = $arg{default};
 	my $resp;
 	my $i = 0;
+	term_init() unless $term;
 
 	if ( !( defined($term->IN)
             && defined( fileno($term->IN) )
@@ -497,7 +508,10 @@ sub init_subdir {
 
 sub cmd_clone {
 	my ($url, $path) = @_;
-	if (!defined $path &&
+	if (!$url) {
+		die "SVN repository location required ",
+		    "as a command-line argument\n";
+	} elsif (!defined $path &&
 	    (defined $_trunk || @_branches || @_tags ||
 	     defined $_stdlayout) &&
 	    $url !~ m#^[a-z\+]+://#) {
@@ -1159,9 +1173,12 @@ sub cmd_branch {
 	}
 
 	::_req_svn();
+	require SVN::Client;
 
+	my ($config, $baton, undef) = Git::SVN::Ra::prepare_config_once();
 	my $ctx = SVN::Client->new(
-		auth    => Git::SVN::Ra::_auth_providers(),
+		auth => $baton,
+		config => $config,
 		log_msg => sub {
 			${ $_[0] } = defined $_message
 				? $_message
@@ -1370,6 +1387,49 @@ sub cmd_propget {
 	print $props->{$prop} . "\n";
 }
 
+# cmd_propset (PROPNAME, PROPVAL, PATH)
+# ------------------------
+# Adjust the SVN property PROPNAME to PROPVAL for PATH.
+sub cmd_propset {
+	my ($propname, $propval, $path) = @_;
+	$path = '.' if not defined $path;
+	$path = $cmd_dir_prefix . $path;
+	usage(1) if not defined $propname;
+	usage(1) if not defined $propval;
+	my $file = basename($path);
+	my $dn = dirname($path);
+	my $cur_props = Git::SVN::Editor::check_attr( "svn-properties", $path );
+	my @new_props;
+	if (!$cur_props || $cur_props eq "unset" || $cur_props eq "" || $cur_props eq "set") {
+		push @new_props, "$propname=$propval";
+	} else {
+		# TODO: handle combining properties better
+		my @props = split(/;/, $cur_props);
+		my $replaced_prop;
+		foreach my $prop (@props) {
+			# Parse 'name=value' syntax and set the property.
+			if ($prop =~ /([^=]+)=(.*)/) {
+				my ($n,$v) = ($1,$2);
+				if ($n eq $propname) {
+					$v = $propval;
+					$replaced_prop = 1;
+				}
+				push @new_props, "$n=$v";
+			}
+		}
+		if (!$replaced_prop) {
+			push @new_props, "$propname=$propval";
+		}
+	}
+	my $attrfile = "$dn/.gitattributes";
+	open my $attrfh, '>>', $attrfile or die "Can't open $attrfile: $!\n";
+	# TODO: don't simply append here if $file already has svn-properties
+	my $new_props = join(';', @new_props);
+	print $attrfh "$file svn-properties=$new_props\n" or
+		die "write to $attrfile: $!\n";
+	close $attrfh or die "close $attrfile: $!\n";
+}
+
 # cmd_proplist (PATH)
 # -------------------
 # Print the list of SVN properties for PATH.
@@ -1389,17 +1449,7 @@ sub cmd_multi_init {
 		usage(1);
 	}
 
-	unless (defined $_prefix) {
-		$_prefix = '';
-		warn <<EOF
-WARNING: --prefix is not given, defaulting to empty prefix.
-         This is probably not what you want! In order to stay compatible
-         with regular remote-tracking refs, provide a prefix like
-         --prefix=origin/ (remember the trailing slash), which will cause
-         the SVN-tracking refs to be placed at refs/remotes/origin/*.
-NOTE: In Git v2.0, the default prefix will change from empty to 'origin/'.
-EOF
-	}
+	$_prefix = 'origin/' unless defined $_prefix;
 	if (defined $url) {
 		$url = canonicalize_url($url);
 		init_subdir(@_);
@@ -1485,10 +1535,37 @@ sub cmd_commit_diff {
 	}
 }
 
-
 sub cmd_info {
-	my $path = canonicalize_path(defined($_[0]) ? $_[0] : ".");
-	my $fullpath = canonicalize_path($cmd_dir_prefix . $path);
+	my $path_arg = defined($_[0]) ? $_[0] : '.';
+	my $path = $path_arg;
+	if (File::Spec->file_name_is_absolute($path)) {
+		$path = canonicalize_path($path);
+
+		my $toplevel = eval {
+			my @cmd = qw/rev-parse --show-toplevel/;
+			command_oneline(\@cmd, STDERR => 0);
+		};
+
+		# remove $toplevel from the absolute path:
+		my ($vol, $dirs, $file) = File::Spec->splitpath($path);
+		my (undef, $tdirs, $tfile) = File::Spec->splitpath($toplevel);
+		my @dirs = File::Spec->splitdir($dirs);
+		my @tdirs = File::Spec->splitdir($tdirs);
+		pop @dirs if $dirs[-1] eq '';
+		pop @tdirs if $tdirs[-1] eq '';
+		push @dirs, $file;
+		push @tdirs, $tfile;
+		while (@tdirs && @dirs && $tdirs[0] eq $dirs[0]) {
+			shift @dirs;
+			shift @tdirs;
+		}
+		$dirs = File::Spec->catdir(@dirs);
+		$path = File::Spec->catpath($vol, $dirs);
+
+		$path = canonicalize_path($path);
+	} else {
+		$path = canonicalize_path($cmd_dir_prefix . $path);
+	}
 	if (exists $_[1]) {
 		die "Too many arguments specified\n";
 	}
@@ -1509,14 +1586,14 @@ sub cmd_info {
 	# canonicalize_path() will return "" to make libsvn 1.5.x happy,
 	$path = "." if $path eq "";
 
-	my $full_url = canonicalize_url( add_path_to_url( $url, $fullpath ) );
+	my $full_url = canonicalize_url( add_path_to_url( $url, $path ) );
 
 	if ($_url) {
 		print "$full_url\n";
 		return;
 	}
 
-	my $result = "Path: $path\n";
+	my $result = "Path: $path_arg\n";
 	$result .= "Name: " . basename($path) . "\n" if $file_type ne "dir";
 	$result .= "URL: $full_url\n";
 
@@ -1547,7 +1624,7 @@ sub cmd_info {
 	}
 
 	my ($lc_author, $lc_rev, $lc_date_utc);
-	my @args = Git::SVN::Log::git_svn_log_cmd($rev, $rev, "--", $fullpath);
+	my @args = Git::SVN::Log::git_svn_log_cmd($rev, $rev, "--", $path);
 	my $log = command_output_pipe(@args);
 	my $esc_color = qr/(?:\033\[(?:(?:\d+;)*\d*)?m)*/;
 	while (<$log>) {
@@ -1617,11 +1694,13 @@ sub cmd_reset {
 }
 
 sub cmd_gc {
+	require File::Find;
 	if (!can_compress()) {
 		warn "Compress::Zlib could not be found; unhandled.log " .
 		     "files will not be compressed.\n";
 	}
-	find({ wanted => \&gc_directory, no_chdir => 1}, "$ENV{GIT_DIR}/svn");
+	File::Find::find({ wanted => \&gc_directory, no_chdir => 1},
+			 Git::SVN::svn_dir());
 }
 
 ########################### utility functions #########################
@@ -1655,7 +1734,7 @@ sub post_fetch_checkout {
 	return unless verify_ref('HEAD^0');
 
 	return if $ENV{GIT_DIR} !~ m#^(?:.*/)?\.git$#;
-	my $index = $ENV{GIT_INDEX_FILE} || "$ENV{GIT_DIR}/index";
+	my $index = command_oneline(qw(rev-parse --git-path index));
 	return if -f $index;
 
 	return if command_oneline(qw/rev-parse --is-inside-work-tree/) eq 'false';
@@ -1670,11 +1749,12 @@ sub post_fetch_checkout {
 
 sub complete_svn_url {
 	my ($url, $path) = @_;
-	$path = canonicalize_path($path);
 
-	# If the path is not a URL...
-	if ($path !~ m#^[a-z\+]+://#) {
-		if (!defined $url || $url !~ m#^[a-z\+]+://#) {
+	if ($path =~ m#^[a-z\+]+://#i) { # path is a URL
+		$path = canonicalize_url($path);
+	} else {
+		$path = canonicalize_path($path);
+		if (!defined $url || $url !~ m#^[a-z\+]+://#i) {
 			fatal("E: '$path' is not a complete URL ",
 			      "and a separate URL is not specified");
 		}
@@ -1689,11 +1769,12 @@ sub complete_url_ls_init {
 		print STDERR "W: $switch not specified\n";
 		return;
 	}
-	$repo_path = canonicalize_path($repo_path);
-	if ($repo_path =~ m#^[a-z\+]+://#) {
+	if ($repo_path =~ m#^[a-z\+]+://#i) {
+		$repo_path = canonicalize_url($repo_path);
 		$ra = Git::SVN::Ra->new($repo_path);
 		$repo_path = '';
 	} else {
+		$repo_path = canonicalize_path($repo_path);
 		$repo_path =~ s#^/+##;
 		unless ($ra) {
 			fatal("E: '$repo_path' is not a complete URL ",
@@ -1755,8 +1836,9 @@ sub get_tree_from_treeish {
 sub get_commit_entry {
 	my ($treeish) = shift;
 	my %log_entry = ( log => '', tree => get_tree_from_treeish($treeish) );
-	my $commit_editmsg = "$ENV{GIT_DIR}/COMMIT_EDITMSG";
-	my $commit_msg = "$ENV{GIT_DIR}/COMMIT_MSG";
+	my @git_path = qw(rev-parse --git-path);
+	my $commit_editmsg = command_oneline(@git_path, 'COMMIT_EDITMSG');
+	my $commit_msg = command_oneline(@git_path, 'COMMIT_MSG');
 	open my $log_fh, '>', $commit_editmsg or croak $!;
 
 	my $type = command_oneline(qw/cat-file -t/, $treeish);
@@ -1800,10 +1882,9 @@ sub get_commit_entry {
 	{
 		require Encode;
 		# SVN requires messages to be UTF-8 when entering the repo
-		local $/;
 		open $log_fh, '<', $commit_msg or croak $!;
 		binmode $log_fh;
-		chomp($log_entry{log} = <$log_fh>);
+		chomp($log_entry{log} = get_record($log_fh, undef));
 
 		my $enc = Git::config('i18n.commitencoding') || 'UTF-8';
 		my $msg = $log_entry{log};
@@ -1849,7 +1930,7 @@ sub load_authors {
 	my $log = $cmd eq 'log';
 	while (<$authors>) {
 		chomp;
-		next unless /^(.+?|\(no author\))\s*=\s*(.+?)\s*<(.+)>\s*$/;
+		next unless /^(.+?|\(no author\))\s*=\s*(.+?)\s*<(.*)>\s*$/;
 		my ($user, $name, $email) = ($1, $2, $3);
 		if ($log) {
 			$Git::SVN::Log::rusers{"$name <$email>"} = $user;
@@ -2046,6 +2127,7 @@ sub find_file_type_and_diff_status {
 sub md5sum {
 	my $arg = shift;
 	my $ref = ref $arg;
+	require Digest::MD5;
 	my $md5 = Digest::MD5->new();
         if ($ref eq 'GLOB' || $ref eq 'IO::File' || $ref eq 'File::Temp') {
 		$md5->addfile($arg) or croak $!;
@@ -2072,6 +2154,7 @@ sub gc_directory {
 			$gz->gzwrite($str) or
 				die "Unable to write: ".$gz->gzerror()."!\n";
 		}
+		no warnings 'once'; # $File::Find::name would warn
 		unlink $_ or die "unlink $File::Find::name: $!\n";
 	} elsif (-f $_ && basename($_) eq "index") {
 		unlink $_ or die "unlink $_: $!\n";

@@ -6,12 +6,8 @@
 test_description='test smart pushing over http via http-backend'
 . ./test-lib.sh
 
-if test -n "$NO_CURL"; then
-	skip_all='skipping test, git built without http support'
-	test_done
-fi
-
 ROOT_PATH="$PWD"
+. "$TEST_DIRECTORY"/lib-gpg.sh
 . "$TEST_DIRECTORY"/lib-httpd.sh
 . "$TEST_DIRECTORY"/lib-terminal.sh
 start_httpd
@@ -78,7 +74,7 @@ test_expect_success 'push to remote repository (standard)' '
 	test_tick &&
 	git commit -m path2 &&
 	HEAD=$(git rev-parse --verify HEAD) &&
-	GIT_CURL_VERBOSE=1 git push -v -v 2>err &&
+	GIT_TRACE_CURL=true git push -v -v 2>err &&
 	! grep "Expect: 100-continue" err &&
 	grep "POST git-receive-pack ([0-9]* bytes)" err &&
 	(cd "$HTTPD_DOCUMENT_ROOT_PATH"/test_repo.git &&
@@ -123,7 +119,7 @@ test_expect_success 'rejected update prints status' '
 	git commit -m dev2 &&
 	test_must_fail git push origin dev2 2>act &&
 	sed -e "/^remote: /s/ *$//" <act >cmp &&
-	test_cmp exp cmp
+	test_i18ncmp exp cmp
 '
 rm -f "$HTTPD_DOCUMENT_ROOT_PATH/test_repo.git/hooks/update"
 
@@ -157,7 +153,7 @@ test_http_push_nonff "$HTTPD_DOCUMENT_ROOT_PATH"/test_repo.git \
 test_expect_success 'push fails for non-fast-forward refs unmatched by remote helper' '
 	# create a dissimilarly-named remote ref so that git is unable to match the
 	# two refs (viz. local, remote) unless an explicit refspec is provided.
-	git push origin master:retsam
+	git push origin master:retsam &&
 
 	echo "change changed" > path2 &&
 	git commit -a -m path2 --amend &&
@@ -223,7 +219,7 @@ test_expect_success TTY 'push shows progress when stderr is a tty' '
 	cd "$ROOT_PATH"/test_repo_clone &&
 	test_commit noisy &&
 	test_terminal git push >output 2>&1 &&
-	grep "^Writing objects" output
+	test_i18ngrep "^Writing objects" output
 '
 
 test_expect_success TTY 'push --quiet silences status and progress' '
@@ -237,16 +233,16 @@ test_expect_success TTY 'push --no-progress silences progress but not status' '
 	cd "$ROOT_PATH"/test_repo_clone &&
 	test_commit no-progress &&
 	test_terminal git push --no-progress >output 2>&1 &&
-	grep "^To http" output &&
-	! grep "^Writing objects"
+	test_i18ngrep "^To http" output &&
+	test_i18ngrep ! "^Writing objects"
 '
 
 test_expect_success 'push --progress shows progress to non-tty' '
 	cd "$ROOT_PATH"/test_repo_clone &&
 	test_commit progress &&
 	git push --progress >output 2>&1 &&
-	grep "^To http" output &&
-	grep "^Writing objects" output
+	test_i18ngrep "^To http" output &&
+	test_i18ngrep "^Writing objects" output
 '
 
 test_expect_success 'http push gives sane defaults to reflog' '
@@ -321,6 +317,64 @@ test_expect_success 'push into half-auth-complete requires password' '
 		log -1 --format=%s >actual &&
 	expect_askpass both user@host &&
 	test_cmp expect actual
+'
+
+test_expect_success CMDLINE_LIMIT 'push 2000 tags over http' '
+	sha1=$(git rev-parse HEAD) &&
+	test_seq 2000 |
+	  sort |
+	  sed "s|.*|$sha1 refs/tags/really-long-tag-name-&|" \
+	  >.git/packed-refs &&
+	run_with_limited_cmdline git push --mirror
+'
+
+test_expect_success GPG 'push with post-receive to inspect certificate' '
+	(
+		cd "$HTTPD_DOCUMENT_ROOT_PATH"/test_repo.git &&
+		mkdir -p hooks &&
+		write_script hooks/post-receive <<-\EOF &&
+		# discard the update list
+		cat >/dev/null
+		# record the push certificate
+		if test -n "${GIT_PUSH_CERT-}"
+		then
+			git cat-file blob $GIT_PUSH_CERT >../push-cert
+		fi &&
+		cat >../push-cert-status <<E_O_F
+		SIGNER=${GIT_PUSH_CERT_SIGNER-nobody}
+		KEY=${GIT_PUSH_CERT_KEY-nokey}
+		STATUS=${GIT_PUSH_CERT_STATUS-nostatus}
+		NONCE_STATUS=${GIT_PUSH_CERT_NONCE_STATUS-nononcestatus}
+		NONCE=${GIT_PUSH_CERT_NONCE-nononce}
+		E_O_F
+		EOF
+
+		git config receive.certnonceseed sekrit &&
+		git config receive.certnonceslop 30
+	) &&
+	cd "$ROOT_PATH/test_repo_clone" &&
+	test_commit cert-test &&
+	git push --signed "$HTTPD_URL/smart/test_repo.git" &&
+	(
+		cd "$HTTPD_DOCUMENT_ROOT_PATH" &&
+		cat <<-\EOF &&
+		SIGNER=C O Mitter <committer@example.com>
+		KEY=13B6F51ECDDE430D
+		STATUS=G
+		NONCE_STATUS=OK
+		EOF
+		sed -n -e "s/^nonce /NONCE=/p" -e "/^$/q" push-cert
+	) >expect &&
+	test_cmp expect "$HTTPD_DOCUMENT_ROOT_PATH/push-cert-status"
+'
+
+test_expect_success 'push status output scrubs password' '
+	cd "$ROOT_PATH/test_repo_clone" &&
+	git push --porcelain \
+		"$HTTPD_URL_USER_PASS/smart/test_repo.git" \
+		+HEAD:scrub >status &&
+	# should have been scrubbed down to vanilla URL
+	grep "^To $HTTPD_URL/smart/test_repo.git" status
 '
 
 stop_httpd

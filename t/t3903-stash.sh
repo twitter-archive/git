@@ -10,6 +10,8 @@ test_description='Test git stash'
 test_expect_success 'stash some dirty working directory' '
 	echo 1 > file &&
 	git add file &&
+	echo unrelated >other-file &&
+	git add other-file &&
 	test_tick &&
 	git commit -m initial &&
 	echo 2 > file &&
@@ -45,8 +47,6 @@ test_expect_success 'applying bogus stash does nothing' '
 
 test_expect_success 'apply does not need clean working directory' '
 	echo 4 >other-file &&
-	git add other-file &&
-	echo 5 >other-file &&
 	git stash apply &&
 	echo 3 >expect &&
 	test_cmp expect file
@@ -93,6 +93,10 @@ test_expect_success 'unstashing in a subdirectory' '
 	)
 '
 
+test_expect_success 'stash drop complains of extra options' '
+	test_must_fail git stash drop --foo
+'
+
 test_expect_success 'drop top stash' '
 	git reset --hard &&
 	git stash list > stashlist1 &&
@@ -114,6 +118,26 @@ test_expect_success 'drop middle stash' '
 	echo 9 > file &&
 	git stash &&
 	git stash drop stash@{1} &&
+	test 2 = $(git stash list | wc -l) &&
+	git stash apply &&
+	test 9 = $(cat file) &&
+	test 1 = $(git show :file) &&
+	test 1 = $(git show HEAD:file) &&
+	git reset --hard &&
+	git stash drop &&
+	git stash apply &&
+	test 3 = $(cat file) &&
+	test 1 = $(git show :file) &&
+	test 1 = $(git show HEAD:file)
+'
+
+test_expect_success 'drop middle stash by index' '
+	git reset --hard &&
+	echo 8 >file &&
+	git stash &&
+	echo 9 >file &&
+	git stash &&
+	git stash drop 1 &&
 	test 2 = $(git stash list | wc -l) &&
 	git stash apply &&
 	test 9 = $(cat file) &&
@@ -250,9 +274,7 @@ test_expect_success 'stash --invalid-option' '
 	git add file2 &&
 	test_must_fail git stash --invalid-option &&
 	test_must_fail git stash save --invalid-option &&
-	test bar5,bar6 = $(cat file),$(cat file2) &&
-	git stash -- -message-starting-with-dash &&
-	test bar,bar2 = $(cat file),$(cat file2)
+	test bar5,bar6 = $(cat file),$(cat file2)
 '
 
 test_expect_success 'stash an added file' '
@@ -600,6 +622,21 @@ test_expect_success 'invalid ref of the form stash@{n}, n >= N' '
 	git stash drop
 '
 
+test_expect_success 'invalid ref of the form "n", n >= N' '
+	git stash clear &&
+	test_must_fail git stash drop 0 &&
+	echo bar5 >file &&
+	echo bar6 >file2 &&
+	git add file2 &&
+	git stash &&
+	test_must_fail git stash drop 1 &&
+	test_must_fail git stash pop 1 &&
+	test_must_fail git stash apply 1 &&
+	test_must_fail git stash show 1 &&
+	test_must_fail git stash branch tmp 1 &&
+	git stash drop
+'
+
 test_expect_success 'stash branch should not drop the stash if the branch exists' '
 	git stash clear &&
 	echo foo >file &&
@@ -668,7 +705,7 @@ test_expect_success 'store updates stash ref and reflog' '
 	! grep quux bazzy &&
 	git stash store -m quuxery $STASH_ID &&
 	test $(cat .git/refs/stash) = $STASH_ID &&
-	grep $STASH_ID .git/logs/refs/stash &&
+	git reflog --format=%H stash| grep $STASH_ID &&
 	git stash pop &&
 	grep quux bazzy
 '
@@ -683,6 +720,191 @@ test_expect_success 'handle stash specification with spaces' '
 	git stash &&
 	git stash apply "stash@{$stamp}" &&
 	grep pig file
+'
+
+test_expect_success 'setup stash with index and worktree changes' '
+	git stash clear &&
+	git reset --hard &&
+	echo index >file &&
+	git add file &&
+	echo working >file &&
+	git stash
+'
+
+test_expect_success 'stash list implies --first-parent -m' '
+	cat >expect <<-EOF &&
+	stash@{0}
+
+	diff --git a/file b/file
+	index 257cc56..d26b33d 100644
+	--- a/file
+	+++ b/file
+	@@ -1 +1 @@
+	-foo
+	+working
+	EOF
+	git stash list --format=%gd -p >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'stash list --cc shows combined diff' '
+	cat >expect <<-\EOF &&
+	stash@{0}
+
+	diff --cc file
+	index 257cc56,9015a7a..d26b33d
+	--- a/file
+	+++ b/file
+	@@@ -1,1 -1,1 +1,1 @@@
+	- foo
+	 -index
+	++working
+	EOF
+	git stash list --format=%gd -p --cc >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'stash is not confused by partial renames' '
+	mv file renamed &&
+	git add renamed &&
+	git stash &&
+	git stash apply &&
+	test_path_is_file renamed &&
+	test_path_is_missing file
+'
+
+test_expect_success 'push -m shows right message' '
+	>foo &&
+	git add foo &&
+	git stash push -m "test message" &&
+	echo "stash@{0}: On master: test message" >expect &&
+	git stash list -1 >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'create stores correct message' '
+	>foo &&
+	git add foo &&
+	STASH_ID=$(git stash create "create test message") &&
+	echo "On master: create test message" >expect &&
+	git show --pretty=%s -s ${STASH_ID} >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'create with multiple arguments for the message' '
+	>foo &&
+	git add foo &&
+	STASH_ID=$(git stash create test untracked) &&
+	echo "On master: test untracked" >expect &&
+	git show --pretty=%s -s ${STASH_ID} >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'stash -- <pathspec> stashes and restores the file' '
+	>foo &&
+	>bar &&
+	git add foo bar &&
+	git stash push -- foo &&
+	test_path_is_file bar &&
+	test_path_is_missing foo &&
+	git stash pop &&
+	test_path_is_file foo &&
+	test_path_is_file bar
+'
+
+test_expect_success 'stash with multiple pathspec arguments' '
+	>foo &&
+	>bar &&
+	>extra &&
+	git add foo bar extra &&
+	git stash push -- foo bar &&
+	test_path_is_missing bar &&
+	test_path_is_missing foo &&
+	test_path_is_file extra &&
+	git stash pop &&
+	test_path_is_file foo &&
+	test_path_is_file bar &&
+	test_path_is_file extra
+'
+
+test_expect_success 'stash with file including $IFS character' '
+	>"foo bar" &&
+	>foo &&
+	>bar &&
+	git add foo* &&
+	git stash push -- "foo b*" &&
+	test_path_is_missing "foo bar" &&
+	test_path_is_file foo &&
+	test_path_is_file bar &&
+	git stash pop &&
+	test_path_is_file "foo bar" &&
+	test_path_is_file foo &&
+	test_path_is_file bar
+'
+
+test_expect_success 'stash with pathspec matching multiple paths' '
+       echo original >file &&
+       echo original >other-file &&
+       git commit -m "two" file other-file &&
+       echo modified >file &&
+       echo modified >other-file &&
+       git stash push -- "*file" &&
+       echo original >expect &&
+       test_cmp expect file &&
+       test_cmp expect other-file &&
+       git stash pop &&
+       echo modified >expect &&
+       test_cmp expect file &&
+       test_cmp expect other-file
+'
+
+test_expect_success 'stash push -p with pathspec shows no changes only once' '
+	>foo &&
+	git add foo &&
+	git commit -m "tmp" &&
+	git stash push -p foo >actual &&
+	echo "No local changes to save" >expect &&
+	git reset --hard HEAD~ &&
+	test_cmp expect actual
+'
+
+test_expect_success 'stash push with pathspec shows no changes when there are none' '
+	>foo &&
+	git add foo &&
+	git commit -m "tmp" &&
+	git stash push foo >actual &&
+	echo "No local changes to save" >expect &&
+	git reset --hard HEAD~ &&
+	test_cmp expect actual
+'
+
+test_expect_success 'stash push with pathspec not in the repository errors out' '
+	>untracked &&
+	test_must_fail git stash push untracked &&
+	test_path_is_file untracked
+'
+
+test_expect_success 'untracked files are left in place when -u is not given' '
+	>file &&
+	git add file &&
+	>untracked &&
+	git stash push file &&
+	test_path_is_file untracked
+'
+
+test_expect_success 'stash without verb with pathspec' '
+	>"foo bar" &&
+	>foo &&
+	>bar &&
+	git add foo* &&
+	git stash -- "foo b*" &&
+	test_path_is_missing "foo bar" &&
+	test_path_is_file foo &&
+	test_path_is_file bar &&
+	git stash pop &&
+	test_path_is_file "foo bar" &&
+	test_path_is_file foo &&
+	test_path_is_file bar
 '
 
 test_done

@@ -24,7 +24,7 @@ void record_resolve_undo(struct index_state *istate, struct cache_entry *ce)
 	if (!lost->util)
 		lost->util = xcalloc(1, sizeof(*ui));
 	ui = lost->util;
-	hashcpy(ui->sha1[stage - 1], ce->sha1);
+	hashcpy(ui->sha1[stage - 1], ce->oid.hash);
 	ui->mode[stage - 1] = ce->ce_mode;
 }
 
@@ -110,7 +110,7 @@ void resolve_undo_clear_index(struct index_state *istate)
 	string_list_clear(resolve_undo, 1);
 	free(resolve_undo);
 	istate->resolve_undo = NULL;
-	istate->cache_changed = 1;
+	istate->cache_changed |= RESOLVE_UNDO_CHANGED;
 }
 
 int unmerge_index_entry_at(struct index_state *istate, int pos)

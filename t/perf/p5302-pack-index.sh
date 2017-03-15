@@ -8,9 +8,16 @@ test_perf_large_repo
 
 test_expect_success 'repack' '
 	git repack -ad &&
-	PACK=`ls .git/objects/pack/*.pack | head -n1` &&
+	PACK=$(ls .git/objects/pack/*.pack | head -n1) &&
 	test -f "$PACK" &&
 	export PACK
+'
+
+test_expect_success 'create target repositories' '
+	for repo in t1 t2 t3 t4 t5 t6
+	do
+		git init --bare $repo
+	done
 '
 
 test_perf 'index-pack 0 threads' '

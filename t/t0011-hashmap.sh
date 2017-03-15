@@ -218,7 +218,7 @@ test_expect_success 'grow / shrink' '
 	echo size >> in &&
 	echo 64 51 >> expect &&
 	echo put key52 value52 >> in &&
-	echo NULL >> expect
+	echo NULL >> expect &&
 	echo size >> in &&
 	echo 256 52 >> expect &&
 	for n in $(test_seq 12)
@@ -234,6 +234,19 @@ test_expect_success 'grow / shrink' '
 	echo 64 39 >> expect &&
 	cat in | test-hashmap > out &&
 	test_cmp expect out
+
+'
+
+test_expect_success 'string interning' '
+
+test_hashmap "intern value1
+intern Value1
+intern value2
+intern value2
+" "value1
+Value1
+value2
+value2"
 
 '
 

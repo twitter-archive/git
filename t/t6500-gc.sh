@@ -30,4 +30,57 @@ test_expect_success 'gc -h with invalid configuration' '
 	test_i18ngrep "[Uu]sage" broken/usage
 '
 
+test_expect_success 'gc is not aborted due to a stale symref' '
+	git init remote &&
+	(
+		cd remote &&
+		test_commit initial &&
+		git clone . ../client &&
+		git branch -m develop &&
+		cd ../client &&
+		git fetch --prune &&
+		git gc
+	)
+'
+
+test_expect_success 'auto gc with too many loose objects does not attempt to create bitmaps' '
+	test_config gc.auto 3 &&
+	test_config gc.autodetach false &&
+	test_config pack.writebitmaps true &&
+	# We need to create two object whose sha1s start with 17
+	# since this is what git gc counts.  As it happens, these
+	# two blobs will do so.
+	test_commit 263 &&
+	test_commit 410 &&
+	# Our first gc will create a pack; our second will create a second pack
+	git gc --auto &&
+	ls .git/objects/pack | sort >existing_packs &&
+	test_commit 523 &&
+	test_commit 790 &&
+
+	git gc --auto 2>err &&
+	test_i18ngrep ! "^warning:" err &&
+	ls .git/objects/pack/ | sort >post_packs &&
+	comm -1 -3 existing_packs post_packs >new &&
+	comm -2 -3 existing_packs post_packs >del &&
+	test_line_count = 0 del && # No packs are deleted
+	test_line_count = 2 new # There is one new pack and its .idx
+'
+
+test_expect_success 'background auto gc does not run if gc.log is present and recent but does if it is old' '
+	test_commit foo &&
+	test_commit bar &&
+	git repack &&
+	test_config gc.autopacklimit 1 &&
+	test_config gc.autodetach true &&
+	echo fleem >.git/gc.log &&
+	test_must_fail git gc --auto 2>err &&
+	test_i18ngrep "^error:" err &&
+	test_config gc.logexpiry 5.days &&
+	test-chmtime =-345600 .git/gc.log &&
+	test_must_fail git gc --auto &&
+	test_config gc.logexpiry 2.days &&
+	git gc --auto
+'
+
 test_done

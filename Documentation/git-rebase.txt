@@ -3,16 +3,16 @@ git-rebase(1)
 
 NAME
 ----
-git-rebase - Forward-port local commits to the updated upstream head
+git-rebase - Reapply commits on top of another base tip
 
 SYNOPSIS
 --------
 [verse]
 'git rebase' [-i | --interactive] [options] [--exec <cmd>] [--onto <newbase>]
-	[<upstream>] [<branch>]
+	[<upstream> [<branch>]]
 'git rebase' [-i | --interactive] [options] [--exec <cmd>] [--onto <newbase>]
 	--root [<branch>]
-'git rebase' --continue | --skip | --abort | --edit-todo
+'git rebase' --continue | --skip | --abort | --quit | --edit-todo
 
 DESCRIPTION
 -----------
@@ -21,15 +21,17 @@ If <branch> is specified, 'git rebase' will perform an automatic
 it remains on the current branch.
 
 If <upstream> is not specified, the upstream configured in
-branch.<name>.remote and branch.<name>.merge options will be used; see
-linkgit:git-config[1] for details.  If you are currently not on any
-branch or if the current branch does not have a configured upstream,
-the rebase will abort.
+branch.<name>.remote and branch.<name>.merge options will be used (see
+linkgit:git-config[1] for details) and the `--fork-point` option is
+assumed.  If you are currently not on any branch or if the current
+branch does not have a configured upstream, the rebase will abort.
 
 All changes made by commits in the current branch but that are not
 in <upstream> are saved to a temporary area.  This is the same set
-of commits that would be shown by `git log <upstream>..HEAD` (or
-`git log HEAD`, if --root is specified).
+of commits that would be shown by `git log <upstream>..HEAD`; or by
+`git log 'fork_point'..HEAD`, if `--fork-point` is active (see the
+description on `--fork-point` below); or by `git log HEAD`, if the
+`--root` option is specified.
 
 The current branch is reset to <upstream>, or <newbase> if the
 --onto option was supplied.  This has the exact same effect as
@@ -78,7 +80,7 @@ remain the checked-out branch.
 If the upstream branch already contains a change you have made (e.g.,
 because you mailed a patch which was applied upstream), then that commit
 will be skipped. For example, running `git rebase master` on the
-following history (in which A' and A introduce the same set of changes,
+following history (in which `A'` and `A` introduce the same set of changes,
 but have different committer information):
 
 ------------
@@ -205,11 +207,20 @@ rebase.stat::
 	Whether to show a diffstat of what changed upstream since the last
 	rebase. False by default.
 
-rebase.autosquash::
-	If set to true enable '--autosquash' option by default.
+rebase.autoSquash::
+	If set to true enable `--autosquash` option by default.
 
-rebase.autostash::
-	If set to true enable '--autostash' option by default.
+rebase.autoStash::
+	If set to true enable `--autostash` option by default.
+
+rebase.missingCommitsCheck::
+	If set to "warn", print warnings about removed commits in
+	interactive mode. If set to "error", print the warnings and
+	stop the rebase. If set to "ignore", no checking is
+	done. "ignore" by default.
+
+rebase.instructionFormat::
+	Custom commit list format to use during an `--interactive` rebase.
 
 OPTIONS
 -------
@@ -240,6 +251,11 @@ leave out at most one of A and B, in which case it defaults to HEAD.
 	started, then HEAD will be reset to <branch>. Otherwise HEAD
 	will be reset to where it was when the rebase operation was
 	started.
+
+--quit::
+	Abort the rebase operation but HEAD is not reset back to the
+	original branch. The index and working tree are also left
+	unchanged as a result.
 
 --keep-empty::
 	Keep the commits that do not change anything from its
@@ -283,7 +299,9 @@ which makes little sense.
 
 -S[<keyid>]::
 --gpg-sign[=<keyid>]::
-	GPG-sign commits.
+	GPG-sign commits. The `keyid` argument is optional and
+	defaults to the committer identity; if specified, it must be
+	stuck to the option without a space.
 
 -q::
 --quiet::
@@ -316,11 +334,8 @@ which makes little sense.
 
 -f::
 --force-rebase::
-	Force the rebase even if the current branch is a descendant
-	of the commit you are rebasing onto.  Normally non-interactive rebase will
-	exit with the message "Current branch is up to date" in such a
-	situation.
-	Incompatible with the --interactive option.
+	Force a rebase even if the current branch is up-to-date and
+	the command without `--force` would return without doing anything.
 +
 You may find this (or --no-ff with an interactive rebase) helpful after
 reverting a topic branch merge, as this option recreates the topic branch with
@@ -330,13 +345,18 @@ link:howto/revert-a-faulty-merge.html[revert-a-faulty-merge How-To] for details)
 
 --fork-point::
 --no-fork-point::
-	Use 'git merge-base --fork-point' to find a better common ancestor
-	between `upstream` and `branch` when calculating which commits have
-	have been introduced by `branch` (see linkgit:git-merge-base[1]).
+	Use reflog to find a better common ancestor between <upstream>
+	and <branch> when calculating which commits have been
+	introduced by <branch>.
 +
-If no non-option arguments are given on the command line, then the default is
-`--fork-point @{u}` otherwise the `upstream` argument is interpreted literally
-unless the `--fork-point` option is specified.
+When --fork-point is active, 'fork_point' will be used instead of
+<upstream> to calculate the set of commits to rebase, where
+'fork_point' is the result of `git merge-base --fork-point <upstream>
+<branch>` command (see linkgit:git-merge-base[1]).  If 'fork_point'
+ends up being empty, the <upstream> will be used as a fallback.
++
+If either <upstream> or --root is given on the command line, then the
+default is `--no-fork-point`, otherwise the default is `--fork-point`.
 
 --ignore-whitespace::
 --whitespace=<option>::
@@ -355,10 +375,16 @@ unless the `--fork-point` option is specified.
 	Make a list of the commits which are about to be rebased.  Let the
 	user edit that list before rebasing.  This mode can also be used to
 	split commits (see SPLITTING COMMITS below).
++
+The commit list format can be changed by setting the configuration option
+rebase.instructionFormat.  A customized instruction format will automatically
+have the long commit hash prepended to the format.
 
 -p::
 --preserve-merges::
-	Instead of ignoring merges, try to recreate them.
+	Recreate merge commits instead of flattening the history by replaying
+	commits a merge commit introduces. Merge conflict resolutions or manual
+	amendments to merge commits are not preserved.
 +
 This uses the `--interactive` machinery internally, but combining it
 with the `--interactive` option explicitly is generally not a good
@@ -369,9 +395,6 @@ idea unless you know what you are doing (see BUGS below).
 	Append "exec <cmd>" after each line creating a commit in the
 	final history. <cmd> will be interpreted as one or more shell
 	commands.
-+
-This option can only be used with the `--interactive` option
-(see INTERACTIVE MODE below).
 +
 You may execute several commands by either using one instance of `--exec`
 with several commands:
@@ -385,6 +408,9 @@ or by giving more than one `--exec`:
 If `--autosquash` is used, "exec" lines will not be appended for
 the intermediate commits, and will only appear at the end of each
 squash/fixup series.
++
+This uses the `--interactive` machinery internally, but it can be run
+without an explicit `--interactive`.
 
 --root::
 	Rebase all commits reachable from <branch>, instead of
@@ -407,13 +433,14 @@ squash/fixup series.
 	"fixup! " or "squash! " after the first, in case you referred to an
 	earlier fixup/squash with `git commit --fixup/--squash`.
 +
-This option is only valid when the '--interactive' option is used.
+This option is only valid when the `--interactive` option is used.
 +
-If the '--autosquash' option is enabled by default using the
-configuration variable `rebase.autosquash`, this option can be
+If the `--autosquash` option is enabled by default using the
+configuration variable `rebase.autoSquash`, this option can be
 used to override and disable this setting.
 
---[no-]autostash::
+--autostash::
+--no-autostash::
 	Automatically create a temporary stash before the operation
 	begins, and apply it after the operation ends.  This means
 	that you can run rebase on a dirty worktree.  However, use
@@ -507,6 +534,9 @@ rebasing.
 
 If you just want to edit the commit message for a commit, replace the
 command "pick" with the command "reword".
+
+To drop a commit, replace the command "pick" with "drop", or just
+delete the matching line.
 
 If you want to fold two or more commits into one, replace the command
 "pick" for the second and subsequent commits with "squash" or "fixup".

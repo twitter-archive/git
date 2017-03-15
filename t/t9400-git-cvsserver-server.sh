@@ -25,12 +25,11 @@ perl -e 'use DBI; use DBD::SQLite' >/dev/null 2>&1 || {
     test_done
 }
 
-unset GIT_DIR GIT_CONFIG
-WORKDIR=$(pwd)
-SERVERDIR=$(pwd)/gitcvs.git
+WORKDIR=$PWD
+SERVERDIR=$PWD/gitcvs.git
 git_config="$SERVERDIR/config"
 CVSROOT=":fork:$SERVERDIR"
-CVSWORK="$(pwd)/cvswork"
+CVSWORK="$PWD/cvswork"
 CVS_SERVER=git-cvsserver
 export CVSROOT CVS_SERVER
 
@@ -46,7 +45,8 @@ test_expect_success 'setup' '
   touch secondrootfile &&
   git add secondrootfile &&
   git commit -m "second root") &&
-  git pull secondroot master &&
+  git fetch secondroot master &&
+  git merge --allow-unrelated-histories FETCH_HEAD &&
   git clone -q --bare "$WORKDIR/.git" "$SERVERDIR" >/dev/null 2>&1 &&
   GIT_DIR="$SERVERDIR" git config --bool gitcvs.enabled true &&
   GIT_DIR="$SERVERDIR" git config gitcvs.logfile "$SERVERDIR/gitcvs.log" &&
@@ -512,7 +512,7 @@ test_expect_success 'cvs co -c (shows module database)' '
 # Known issues with git-cvsserver current log output:
 #  - Hard coded "lines: +2 -3" placeholder, instead of real numbers.
 #  - CVS normally does not internally add a blank first line
-#    nor a last line with nothing but a space to log messages.
+#    or a last line with nothing but a space to log messages.
 #  - The latest cvs 1.12.x server sends +0000 timezone (with some hidden "MT"
 #    tagging in the protocol), and if cvs 1.12.x client sees the MT tags,
 #    it converts to local time zone.  git-cvsserver doesn't do the +0000

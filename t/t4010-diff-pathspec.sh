@@ -18,7 +18,7 @@ test_expect_success \
      mkdir path1 &&
      echo rezrov >path1/file1 &&
      git update-index --add file0 path1/file1 &&
-     tree=`git write-tree` &&
+     tree=$(git write-tree) &&
      echo "$tree" &&
      echo nitfol >file0 &&
      echo yomin >path1/file1 &&
@@ -56,7 +56,7 @@ test_expect_success \
      compare_diff_raw current expected'
 
 cat >expected <<\EOF
-:100644 100644 766498d93a4b06057a8e49d23f4068f1170ff38f 0a41e115ab61be0328a19b29f18cdcb49338d516 M	file0
+:100644 100644 8e4020bb5a8d8c873b25de15933e75cc0fc275df dca6b92303befc93086aa025d90a5facd7eb2812 M	file0
 EOF
 test_expect_success \
     'limit to file0 should show file0' \
@@ -77,8 +77,6 @@ test_expect_success 'diff-tree pathspec' '
 	>expected &&
 	test_cmp expected current
 '
-
-EMPTY_TREE=4b825dc642cb6eb9a060e54bf8d69288fbee4904
 
 test_expect_success 'diff-tree with wildcard shows dir also matches' '
 	git diff-tree --name-only $EMPTY_TREE $tree -- "f*" >result &&
@@ -131,7 +129,7 @@ test_expect_success 'diff multiple wildcard pathspecs' '
 	mkdir path2 &&
 	echo rezrov >path2/file1 &&
 	git update-index --add path2/file1 &&
-	tree3=`git write-tree` &&
+	tree3=$(git write-tree) &&
 	git diff --name-only $tree $tree3 -- "path2*1" "path1*1" >actual &&
 	cat <<-\EOF >expect &&
 	path1/file1

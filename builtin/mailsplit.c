@@ -45,6 +45,19 @@ static int is_from_line(const char *line, int len)
 
 static struct strbuf buf = STRBUF_INIT;
 static int keep_cr;
+static int mboxrd;
+
+static int is_gtfrom(const struct strbuf *buf)
+{
+	size_t min = strlen(">From ");
+	size_t ngt;
+
+	if (buf->len < min)
+		return 0;
+
+	ngt = strspn(buf->buf, ">");
+	return ngt && starts_with(buf->buf + ngt, "From ");
+}
 
 /* Called with the first line (potentially partial)
  * already in buf[] -- normally that should begin with
@@ -53,14 +66,15 @@ static int keep_cr;
  */
 static int split_one(FILE *mbox, const char *name, int allow_bare)
 {
-	FILE *output = NULL;
+	FILE *output;
 	int fd;
 	int status = 0;
 	int is_bare = !is_from_line(buf.buf, buf.len);
 
-	if (is_bare && !allow_bare)
-		goto corrupt;
-
+	if (is_bare && !allow_bare) {
+		fprintf(stderr, "corrupt mailbox\n");
+		exit(1);
+	}
 	fd = open(name, O_WRONLY | O_CREAT | O_EXCL, 0666);
 	if (fd < 0)
 		die_errno("cannot open output file '%s'", name);
@@ -75,6 +89,9 @@ static int split_one(FILE *mbox, const char *name, int allow_bare)
 			strbuf_setlen(&buf, buf.len-2);
 			strbuf_addch(&buf, '\n');
 		}
+
+		if (mboxrd && is_gtfrom(&buf))
+			strbuf_remove(&buf, 0, 1);
 
 		if (fwrite(buf.buf, 1, buf.len, output) != buf.len)
 			die_errno("cannot write output");
@@ -91,43 +108,43 @@ static int split_one(FILE *mbox, const char *name, int allow_bare)
 	}
 	fclose(output);
 	return status;
-
- corrupt:
-	if (output)
-		fclose(output);
-	unlink(name);
-	fprintf(stderr, "corrupt mailbox\n");
-	exit(1);
 }
 
 static int populate_maildir_list(struct string_list *list, const char *path)
 {
 	DIR *dir;
 	struct dirent *dent;
-	char name[PATH_MAX];
+	char *name = NULL;
 	char *subs[] = { "cur", "new", NULL };
 	char **sub;
+	int ret = -1;
 
 	for (sub = subs; *sub; ++sub) {
-		snprintf(name, sizeof(name), "%s/%s", path, *sub);
+		free(name);
+		name = xstrfmt("%s/%s", path, *sub);
 		if ((dir = opendir(name)) == NULL) {
 			if (errno == ENOENT)
 				continue;
-			error("cannot opendir %s (%s)", name, strerror(errno));
-			return -1;
+			error_errno("cannot opendir %s", name);
+			goto out;
 		}
 
 		while ((dent = readdir(dir)) != NULL) {
 			if (dent->d_name[0] == '.')
 				continue;
-			snprintf(name, sizeof(name), "%s/%s", *sub, dent->d_name);
+			free(name);
+			name = xstrfmt("%s/%s", *sub, dent->d_name);
 			string_list_insert(list, name);
 		}
 
 		closedir(dir);
 	}
 
-	return 0;
+	ret = 0;
+
+out:
+	free(name);
+	return ret;
 }
 
 static int maildir_filename_cmp(const char *a, const char *b)
@@ -154,8 +171,8 @@ static int maildir_filename_cmp(const char *a, const char *b)
 static int split_maildir(const char *maildir, const char *dir,
 	int nr_prec, int skip)
 {
-	char file[PATH_MAX];
-	char name[PATH_MAX];
+	char *file = NULL;
+	FILE *f = NULL;
 	int ret = -1;
 	int i;
 	struct string_list list = STRING_LIST_INIT_DUP;
@@ -166,27 +183,35 @@ static int split_maildir(const char *maildir, const char *dir,
 		goto out;
 
 	for (i = 0; i < list.nr; i++) {
-		FILE *f;
-		snprintf(file, sizeof(file), "%s/%s", maildir, list.items[i].string);
+		char *name;
+
+		free(file);
+		file = xstrfmt("%s/%s", maildir, list.items[i].string);
+
 		f = fopen(file, "r");
 		if (!f) {
-			error("cannot open mail %s (%s)", file, strerror(errno));
+			error_errno("cannot open mail %s", file);
 			goto out;
 		}
 
 		if (strbuf_getwholeline(&buf, f, '\n')) {
-			error("cannot read mail %s (%s)", file, strerror(errno));
+			error_errno("cannot read mail %s", file);
 			goto out;
 		}
 
-		sprintf(name, "%s/%0*d", dir, nr_prec, ++skip);
+		name = xstrfmt("%s/%0*d", dir, nr_prec, ++skip);
 		split_one(f, name, 1);
+		free(name);
 
 		fclose(f);
+		f = NULL;
 	}
 
 	ret = skip;
 out:
+	if (f)
+		fclose(f);
+	free(file);
 	string_list_clear(&list, 1);
 	return ret;
 }
@@ -194,7 +219,6 @@ out:
 static int split_mbox(const char *file, const char *dir, int allow_bare,
 		      int nr_prec, int skip)
 {
-	char name[PATH_MAX];
 	int ret = -1;
 	int peek;
 
@@ -202,7 +226,7 @@ static int split_mbox(const char *file, const char *dir, int allow_bare,
 	int file_done = 0;
 
 	if (!f) {
-		error("cannot open mbox %s", file);
+		error_errno("cannot open mbox %s", file);
 		goto out;
 	}
 
@@ -221,8 +245,9 @@ static int split_mbox(const char *file, const char *dir, int allow_bare,
 	}
 
 	while (!file_done) {
-		sprintf(name, "%s/%0*d", dir, nr_prec, ++skip);
+		char *name = xstrfmt("%s/%0*d", dir, nr_prec, ++skip);
 		file_done = split_one(f, name, allow_bare);
+		free(name);
 	}
 
 	if (f != stdin)
@@ -262,6 +287,8 @@ int cmd_mailsplit(int argc, const char **argv, const char *prefix)
 			keep_cr = 1;
 		} else if ( arg[1] == 'o' && arg[2] ) {
 			dir = arg+2;
+		} else if (!strcmp(arg, "--mboxrd")) {
+			mboxrd = 1;
 		} else if ( arg[1] == '-' && !arg[2] ) {
 			argp++;	/* -- marks end of options */
 			break;
@@ -309,7 +336,7 @@ int cmd_mailsplit(int argc, const char **argv, const char *prefix)
 		}
 
 		if (stat(arg, &argstat) == -1) {
-			error("cannot stat %s (%s)", arg, strerror(errno));
+			error_errno("cannot stat %s", arg);
 			return 1;
 		}
 

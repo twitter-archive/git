@@ -23,8 +23,32 @@ test_expect_success 'listing all tags in an empty tree should succeed' '
 '
 
 test_expect_success 'listing all tags in an empty tree should output nothing' '
-	test `git tag -l | wc -l` -eq 0 &&
-	test `git tag | wc -l` -eq 0
+	test $(git tag -l | wc -l) -eq 0 &&
+	test $(git tag | wc -l) -eq 0
+'
+
+test_expect_success 'sort tags, ignore case' '
+	(
+		git init sort &&
+		cd sort &&
+		test_commit initial &&
+		git tag tag-one &&
+		git tag TAG-two &&
+		git tag -l >actual &&
+		cat >expected <<-\EOF &&
+		TAG-two
+		initial
+		tag-one
+		EOF
+		test_cmp expected actual &&
+		git tag -l -i >actual &&
+		cat >expected <<-\EOF &&
+		initial
+		tag-one
+		TAG-two
+		EOF
+		test_cmp expected actual
+	)
 '
 
 test_expect_success 'looking for a tag in an empty tree should fail' \
@@ -47,11 +71,47 @@ test_expect_success 'creating a tag for an unknown revision should fail' '
 
 # commit used in the tests, test_tick is also called here to freeze the date:
 test_expect_success 'creating a tag using default HEAD should succeed' '
+	test_config core.logAllRefUpdates true &&
 	test_tick &&
 	echo foo >foo &&
 	git add foo &&
 	git commit -m Foo &&
-	git tag mytag
+	git tag mytag &&
+	test_must_fail git reflog exists refs/tags/mytag
+'
+
+test_expect_success 'creating a tag with --create-reflog should create reflog' '
+	git log -1 \
+		--format="format:tag: tagging %h (%s, %cd)%n" \
+		--date=format:%Y-%m-%d >expected &&
+	test_when_finished "git tag -d tag_with_reflog" &&
+	git tag --create-reflog tag_with_reflog &&
+	git reflog exists refs/tags/tag_with_reflog &&
+	sed -e "s/^.*	//" .git/logs/refs/tags/tag_with_reflog >actual &&
+	test_cmp expected actual
+'
+
+test_expect_success 'annotated tag with --create-reflog has correct message' '
+	git log -1 \
+		--format="format:tag: tagging %h (%s, %cd)%n" \
+		--date=format:%Y-%m-%d >expected &&
+	test_when_finished "git tag -d tag_with_reflog" &&
+	git tag -m "annotated tag" --create-reflog tag_with_reflog &&
+	git reflog exists refs/tags/tag_with_reflog &&
+	sed -e "s/^.*	//" .git/logs/refs/tags/tag_with_reflog >actual &&
+	test_cmp expected actual
+'
+
+test_expect_success '--create-reflog does not create reflog on failure' '
+	test_must_fail git tag --create-reflog mytag &&
+	test_must_fail git reflog exists refs/tags/mytag
+'
+
+test_expect_success 'option core.logAllRefUpdates=always creates reflog' '
+	test_when_finished "git tag -d tag_with_reflog" &&
+	test_config core.logAllRefUpdates always &&
+	git tag tag_with_reflog &&
+	git reflog exists refs/tags/tag_with_reflog
 '
 
 test_expect_success 'listing all tags if one exists should succeed' '
@@ -60,8 +120,8 @@ test_expect_success 'listing all tags if one exists should succeed' '
 '
 
 test_expect_success 'listing all tags if one exists should output that tag' '
-	test `git tag -l` = mytag &&
-	test `git tag` = mytag
+	test $(git tag -l) = mytag &&
+	test $(git tag) = mytag
 '
 
 # pattern matching:
@@ -69,9 +129,12 @@ test_expect_success 'listing all tags if one exists should output that tag' '
 test_expect_success 'listing a tag using a matching pattern should succeed' \
 	'git tag -l mytag'
 
+test_expect_success 'listing a tag with --ignore-case' \
+	'test $(git tag -l --ignore-case MYTAG) = mytag'
+
 test_expect_success \
 	'listing a tag using a matching pattern should output that tag' \
-	'test `git tag -l mytag` = mytag'
+	'test $(git tag -l mytag) = mytag'
 
 # todo: git tag -l now returns always zero, when fixed, change this test
 test_expect_success \
@@ -80,7 +143,7 @@ test_expect_success \
 
 test_expect_success \
 	'listing tags using a non-matching pattern should output nothing' \
-	'test `git tag -l xxx | wc -l` -eq 0'
+	'test $(git tag -l xxx | wc -l) -eq 0'
 
 # special cases for creating tags:
 
@@ -90,13 +153,13 @@ test_expect_success \
 
 test_expect_success \
 	'trying to create a tag with a non-valid name should fail' '
-	test `git tag -l | wc -l` -eq 1 &&
+	test $(git tag -l | wc -l) -eq 1 &&
 	test_must_fail git tag "" &&
 	test_must_fail git tag .othertag &&
 	test_must_fail git tag "other tag" &&
 	test_must_fail git tag "othertag^" &&
 	test_must_fail git tag "other~tag" &&
-	test `git tag -l | wc -l` -eq 1
+	test $(git tag -l | wc -l) -eq 1
 '
 
 test_expect_success 'creating a tag using HEAD directly should succeed' '
@@ -110,11 +173,11 @@ test_expect_success '--force can create a tag with the name of one existing' '
 	tag_exists mytag'
 
 test_expect_success '--force is moot with a non-existing tag name' '
+	test_when_finished git tag -d newtag forcetag &&
 	git tag newtag >expect &&
 	git tag --force forcetag >actual &&
 	test_cmp expect actual
 '
-git tag -d newtag forcetag
 
 # deleting tags:
 
@@ -285,11 +348,9 @@ EOF
 '
 
 test_expect_success 'listing tags in column with column.*' '
-	git config column.tag row &&
-	git config column.ui dense &&
+	test_config column.tag row &&
+	test_config column.ui dense &&
 	COLUMNS=40 git tag -l >actual &&
-	git config --unset column.ui &&
-	git config --unset column.tag &&
 	cat >expected <<\EOF &&
 a1      aa1   cba     t210    t211
 v0.2.1  v1.0  v1.0.1  v1.1.3
@@ -302,9 +363,8 @@ test_expect_success 'listing tag with -n --column should fail' '
 '
 
 test_expect_success 'listing tags -n in column with column.ui ignored' '
-	git config column.ui "row dense" &&
+	test_config column.ui "row dense" &&
 	COLUMNS=40 git tag -l -n >actual &&
-	git config --unset column.ui &&
 	cat >expected <<\EOF &&
 a1              Foo
 aa1             Foo
@@ -763,6 +823,47 @@ test_expect_success GPG '-s implies annotated tag' '
 	test_cmp expect actual
 '
 
+get_tag_header forcesignannotated-implied-sign $commit commit $time >expect
+echo "A message" >>expect
+echo '-----BEGIN PGP SIGNATURE-----' >>expect
+test_expect_success GPG \
+	'git tag -s implied if configured with tag.forcesignannotated' \
+	'test_config tag.forcesignannotated true &&
+	git tag -m "A message" forcesignannotated-implied-sign &&
+	get_tag_msg forcesignannotated-implied-sign >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success GPG \
+	'lightweight with no message when configured with tag.forcesignannotated' \
+	'test_config tag.forcesignannotated true &&
+	git tag forcesignannotated-lightweight &&
+	tag_exists forcesignannotated-lightweight &&
+	test_must_fail git tag -v forcesignannotated-no-message
+'
+
+get_tag_header forcesignannotated-annotate $commit commit $time >expect
+echo "A message" >>expect
+test_expect_success GPG \
+	'git tag -a disable configured tag.forcesignannotated' \
+	'test_config tag.forcesignannotated true &&
+	git tag -a -m "A message" forcesignannotated-annotate &&
+	get_tag_msg forcesignannotated-annotate >actual &&
+	test_cmp expect actual &&
+	test_must_fail git tag -v forcesignannotated-annotate
+'
+
+get_tag_header forcesignannotated-disabled $commit commit $time >expect
+echo "A message" >>expect
+echo '-----BEGIN PGP SIGNATURE-----' >>expect
+test_expect_success GPG \
+	'git tag --sign enable GPG sign' \
+	'test_config tag.forcesignannotated false &&
+	git tag --sign -m "A message" forcesignannotated-disabled &&
+	get_tag_msg forcesignannotated-disabled >actual &&
+	test_cmp expect actual
+'
+
 test_expect_success GPG \
 	'trying to create a signed tag with non-existing -F file should fail' '
 	! test -f nonexistingfile &&
@@ -792,6 +893,22 @@ test_expect_success GPG 'verifying a forged tag should fail' '
 		git mktag) &&
 	git tag forged-tag $forged &&
 	test_must_fail git tag -v forged-tag
+'
+
+test_expect_success 'verifying a proper tag with --format pass and format accordingly' '
+	cat >expect <<-\EOF
+	tagname : signed-tag
+	EOF &&
+	git tag -v --format="tagname : %(tag)" "signed-tag" >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'verifying a forged tag with --format fail and format accordingly' '
+	cat >expect <<-\EOF
+	tagname : forged-tag
+	EOF &&
+	test_must_fail git tag -v --format="tagname : %(tag)" "forged-tag" >actual &&
+	test_cmp expect actual
 '
 
 # blank and empty messages for signed tags:
@@ -1081,7 +1198,7 @@ test_expect_success GPG \
 get_tag_header rfc1991-signed-tag $commit commit $time >expect
 echo "RFC1991 signed tag" >>expect
 echo '-----BEGIN PGP MESSAGE-----' >>expect
-test_expect_success GPG \
+test_expect_success GPG,RFC1991 \
 	'creating a signed tag with rfc1991' '
 	echo "rfc1991" >gpghome/gpg.conf &&
 	git tag -s -m "RFC1991 signed tag" rfc1991-signed-tag $commit &&
@@ -1095,7 +1212,7 @@ cp "$1" actual
 EOF
 chmod +x fakeeditor
 
-test_expect_success GPG \
+test_expect_success GPG,RFC1991 \
 	'reediting a signed tag body omits signature' '
 	echo "rfc1991" >gpghome/gpg.conf &&
 	echo "RFC1991 signed tag" >expect &&
@@ -1103,13 +1220,13 @@ test_expect_success GPG \
 	test_cmp expect actual
 '
 
-test_expect_success GPG \
+test_expect_success GPG,RFC1991 \
 	'verifying rfc1991 signature' '
 	echo "rfc1991" >gpghome/gpg.conf &&
 	git tag -v rfc1991-signed-tag
 '
 
-test_expect_success GPG \
+test_expect_success GPG,RFC1991 \
 	'list tag with rfc1991 signature' '
 	echo "rfc1991" >gpghome/gpg.conf &&
 	echo "rfc1991-signed-tag RFC1991 signed tag" >expect &&
@@ -1123,12 +1240,12 @@ test_expect_success GPG \
 
 rm -f gpghome/gpg.conf
 
-test_expect_success GPG \
+test_expect_success GPG,RFC1991 \
 	'verifying rfc1991 signature without --rfc1991' '
 	git tag -v rfc1991-signed-tag
 '
 
-test_expect_success GPG \
+test_expect_success GPG,RFC1991 \
 	'list tag with rfc1991 signature without --rfc1991' '
 	echo "rfc1991-signed-tag RFC1991 signed tag" >expect &&
 	git tag -l -n1 rfc1991-signed-tag >actual &&
@@ -1139,7 +1256,7 @@ test_expect_success GPG \
 	test_cmp expect actual
 '
 
-test_expect_success GPG \
+test_expect_success GPG,RFC1991 \
 	'reediting a signed tag body omits signature' '
 	echo "RFC1991 signed tag" >expect &&
 	GIT_EDITOR=./fakeeditor git tag -f -s rfc1991-signed-tag $commit &&
@@ -1147,11 +1264,17 @@ test_expect_success GPG \
 '
 
 # try to sign with bad user.signingkey
-git config user.signingkey BobTheMouse
 test_expect_success GPG \
-	'git tag -s fails if gpg is misconfigured' \
-	'test_must_fail git tag -s -m tail tag-gpg-failure'
-git config --unset user.signingkey
+	'git tag -s fails if gpg is misconfigured (bad key)' \
+	'test_config user.signingkey BobTheMouse &&
+	test_must_fail git tag -s -m tail tag-gpg-failure'
+
+# try to produce invalid signature
+test_expect_success GPG \
+	'git tag -s fails if gpg is misconfigured (bad signature format)' \
+	'test_config gpg.program echo &&
+	 test_must_fail git tag -s -m tail tag-gpg-failure'
+
 
 # try to verify without gpg:
 
@@ -1180,8 +1303,8 @@ test_expect_success 'message in editor has initial comment: first line' '
 test_expect_success \
 	'message in editor has initial comment: remainder' '
 	# remove commented lines from the remainder -- should be empty
-	>rest.expect
-	sed -e 1d -e '/^#/d' <actual >rest.actual &&
+	>rest.expect &&
+	sed -e 1d -e "/^#/d" <actual >rest.actual &&
 	test_cmp rest.expect rest.actual
 '
 
@@ -1377,6 +1500,276 @@ test_expect_success 'multiple --points-at are OR-ed together' '
 	v3.0
 	EOF
 	git tag --points-at=v2.0 --points-at=v3.0 >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'lexical sort' '
+	git tag foo1.3 &&
+	git tag foo1.6 &&
+	git tag foo1.10 &&
+	git tag -l --sort=refname "foo*" >actual &&
+	cat >expect <<-\EOF &&
+	foo1.10
+	foo1.3
+	foo1.6
+	EOF
+	test_cmp expect actual
+'
+
+test_expect_success 'version sort' '
+	git tag -l --sort=version:refname "foo*" >actual &&
+	cat >expect <<-\EOF &&
+	foo1.3
+	foo1.6
+	foo1.10
+	EOF
+	test_cmp expect actual
+'
+
+test_expect_success 'reverse version sort' '
+	git tag -l --sort=-version:refname "foo*" >actual &&
+	cat >expect <<-\EOF &&
+	foo1.10
+	foo1.6
+	foo1.3
+	EOF
+	test_cmp expect actual
+'
+
+test_expect_success 'reverse lexical sort' '
+	git tag -l --sort=-refname "foo*" >actual &&
+	cat >expect <<-\EOF &&
+	foo1.6
+	foo1.3
+	foo1.10
+	EOF
+	test_cmp expect actual
+'
+
+test_expect_success 'configured lexical sort' '
+	test_config tag.sort "v:refname" &&
+	git tag -l "foo*" >actual &&
+	cat >expect <<-\EOF &&
+	foo1.3
+	foo1.6
+	foo1.10
+	EOF
+	test_cmp expect actual
+'
+
+test_expect_success 'option override configured sort' '
+	test_config tag.sort "v:refname" &&
+	git tag -l --sort=-refname "foo*" >actual &&
+	cat >expect <<-\EOF &&
+	foo1.6
+	foo1.3
+	foo1.10
+	EOF
+	test_cmp expect actual
+'
+
+test_expect_success 'invalid sort parameter on command line' '
+	test_must_fail git tag -l --sort=notvalid "foo*" >actual
+'
+
+test_expect_success 'invalid sort parameter in configuratoin' '
+	test_config tag.sort "v:notvalid" &&
+	test_must_fail git tag -l "foo*"
+'
+
+test_expect_success 'version sort with prerelease reordering' '
+	test_config versionsort.prereleaseSuffix -rc &&
+	git tag foo1.6-rc1 &&
+	git tag foo1.6-rc2 &&
+	git tag -l --sort=version:refname "foo*" >actual &&
+	cat >expect <<-\EOF &&
+	foo1.3
+	foo1.6-rc1
+	foo1.6-rc2
+	foo1.6
+	foo1.10
+	EOF
+	test_cmp expect actual
+'
+
+test_expect_success 'reverse version sort with prerelease reordering' '
+	test_config versionsort.prereleaseSuffix -rc &&
+	git tag -l --sort=-version:refname "foo*" >actual &&
+	cat >expect <<-\EOF &&
+	foo1.10
+	foo1.6
+	foo1.6-rc2
+	foo1.6-rc1
+	foo1.3
+	EOF
+	test_cmp expect actual
+'
+
+test_expect_success 'version sort with prerelease reordering and common leading character' '
+	test_config versionsort.prereleaseSuffix -before &&
+	git tag foo1.7-before1 &&
+	git tag foo1.7 &&
+	git tag foo1.7-after1 &&
+	git tag -l --sort=version:refname "foo1.7*" >actual &&
+	cat >expect <<-\EOF &&
+	foo1.7-before1
+	foo1.7
+	foo1.7-after1
+	EOF
+	test_cmp expect actual
+'
+
+test_expect_success 'version sort with prerelease reordering, multiple suffixes and common leading character' '
+	test_config versionsort.prereleaseSuffix -before &&
+	git config --add versionsort.prereleaseSuffix -after &&
+	git tag -l --sort=version:refname "foo1.7*" >actual &&
+	cat >expect <<-\EOF &&
+	foo1.7-before1
+	foo1.7-after1
+	foo1.7
+	EOF
+	test_cmp expect actual
+'
+
+test_expect_success 'version sort with prerelease reordering, multiple suffixes match the same tag' '
+	test_config versionsort.prereleaseSuffix -bar &&
+	git config --add versionsort.prereleaseSuffix -foo-baz &&
+	git config --add versionsort.prereleaseSuffix -foo-bar &&
+	git tag foo1.8-foo-bar &&
+	git tag foo1.8-foo-baz &&
+	git tag foo1.8 &&
+	git tag -l --sort=version:refname "foo1.8*" >actual &&
+	cat >expect <<-\EOF &&
+	foo1.8-foo-baz
+	foo1.8-foo-bar
+	foo1.8
+	EOF
+	test_cmp expect actual
+'
+
+test_expect_success 'version sort with prerelease reordering, multiple suffixes match starting at the same position' '
+	test_config versionsort.prereleaseSuffix -pre &&
+	git config --add versionsort.prereleaseSuffix -prerelease &&
+	git tag foo1.9-pre1 &&
+	git tag foo1.9-pre2 &&
+	git tag foo1.9-prerelease1 &&
+	git tag -l --sort=version:refname "foo1.9*" >actual &&
+	cat >expect <<-\EOF &&
+	foo1.9-pre1
+	foo1.9-pre2
+	foo1.9-prerelease1
+	EOF
+	test_cmp expect actual
+'
+
+test_expect_success 'version sort with general suffix reordering' '
+	test_config versionsort.suffix -alpha &&
+	git config --add versionsort.suffix -beta &&
+	git config --add versionsort.suffix ""  &&
+	git config --add versionsort.suffix -gamma &&
+	git config --add versionsort.suffix -delta &&
+	git tag foo1.10-alpha &&
+	git tag foo1.10-beta &&
+	git tag foo1.10-gamma &&
+	git tag foo1.10-delta &&
+	git tag foo1.10-unlisted-suffix &&
+	git tag -l --sort=version:refname "foo1.10*" >actual &&
+	cat >expect <<-\EOF &&
+	foo1.10-alpha
+	foo1.10-beta
+	foo1.10
+	foo1.10-unlisted-suffix
+	foo1.10-gamma
+	foo1.10-delta
+	EOF
+	test_cmp expect actual
+'
+
+test_expect_success 'versionsort.suffix overrides versionsort.prereleaseSuffix' '
+	test_config versionsort.suffix -before &&
+	test_config versionsort.prereleaseSuffix -after &&
+	git tag -l --sort=version:refname "foo1.7*" >actual &&
+	cat >expect <<-\EOF &&
+	foo1.7-before1
+	foo1.7
+	foo1.7-after1
+	EOF
+	test_cmp expect actual
+'
+
+test_expect_success 'version sort with very long prerelease suffix' '
+	test_config versionsort.prereleaseSuffix -very-looooooooooooooooooooooooong-prerelease-suffix &&
+	git tag -l --sort=version:refname
+'
+
+run_with_limited_stack () {
+	(ulimit -s 128 && "$@")
+}
+
+test_lazy_prereq ULIMIT_STACK_SIZE 'run_with_limited_stack true'
+
+# we require ulimit, this excludes Windows
+test_expect_success ULIMIT_STACK_SIZE '--contains works in a deep repo' '
+	>expect &&
+	i=1 &&
+	while test $i -lt 8000
+	do
+		echo "commit refs/heads/master
+committer A U Thor <author@example.com> $((1000000000 + $i * 100)) +0200
+data <<EOF
+commit #$i
+EOF"
+		test $i = 1 && echo "from refs/heads/master^0"
+		i=$(($i + 1))
+	done | git fast-import &&
+	git checkout master &&
+	git tag far-far-away HEAD^ &&
+	run_with_limited_stack git tag --contains HEAD >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success '--format should list tags as per format given' '
+	cat >expect <<-\EOF &&
+	refname : refs/tags/v1.0
+	refname : refs/tags/v1.0.1
+	refname : refs/tags/v1.1.3
+	EOF
+	git tag -l --format="refname : %(refname)" "v1*" >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'setup --merged test tags' '
+	git tag mergetest-1 HEAD~2 &&
+	git tag mergetest-2 HEAD~1 &&
+	git tag mergetest-3 HEAD
+'
+
+test_expect_success '--merged cannot be used in non-list mode' '
+	test_must_fail git tag --merged=mergetest-2 foo
+'
+
+test_expect_success '--merged shows merged tags' '
+	cat >expect <<-\EOF &&
+	mergetest-1
+	mergetest-2
+	EOF
+	git tag -l --merged=mergetest-2 mergetest-* >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success '--no-merged show unmerged tags' '
+	cat >expect <<-\EOF &&
+	mergetest-3
+	EOF
+	git tag -l --no-merged=mergetest-2 mergetest-* >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'ambiguous branch/tags not marked' '
+	git tag ambiguous &&
+	git branch ambiguous &&
+	echo ambiguous >expect &&
+	git tag -l ambiguous >actual &&
 	test_cmp expect actual
 '
 

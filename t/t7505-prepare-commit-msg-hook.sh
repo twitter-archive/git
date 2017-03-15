@@ -53,7 +53,7 @@ test_expect_success 'with hook (-m)' '
 	echo "more" >> file &&
 	git add file &&
 	git commit -m "more" &&
-	test "`git log -1 --pretty=format:%s`" = "message (no editor)"
+	test "$(git log -1 --pretty=format:%s)" = "message (no editor)"
 
 '
 
@@ -62,7 +62,7 @@ test_expect_success 'with hook (-m editor)' '
 	echo "more" >> file &&
 	git add file &&
 	GIT_EDITOR="\"\$FAKE_EDITOR\"" git commit -e -m "more more" &&
-	test "`git log -1 --pretty=format:%s`" = message
+	test "$(git log -1 --pretty=format:%s)" = message
 
 '
 
@@ -71,7 +71,7 @@ test_expect_success 'with hook (-t)' '
 	echo "more" >> file &&
 	git add file &&
 	git commit -t "$(git rev-parse --git-dir)/template" &&
-	test "`git log -1 --pretty=format:%s`" = template
+	test "$(git log -1 --pretty=format:%s)" = template
 
 '
 
@@ -80,7 +80,7 @@ test_expect_success 'with hook (-F)' '
 	echo "more" >> file &&
 	git add file &&
 	(echo more | git commit -F -) &&
-	test "`git log -1 --pretty=format:%s`" = "message (no editor)"
+	test "$(git log -1 --pretty=format:%s)" = "message (no editor)"
 
 '
 
@@ -89,17 +89,17 @@ test_expect_success 'with hook (-F editor)' '
 	echo "more" >> file &&
 	git add file &&
 	(echo more more | GIT_EDITOR="\"\$FAKE_EDITOR\"" git commit -e -F -) &&
-	test "`git log -1 --pretty=format:%s`" = message
+	test "$(git log -1 --pretty=format:%s)" = message
 
 '
 
 test_expect_success 'with hook (-C)' '
 
-	head=`git rev-parse HEAD` &&
+	head=$(git rev-parse HEAD) &&
 	echo "more" >> file &&
 	git add file &&
 	git commit -C $head &&
-	test "`git log -1 --pretty=format:%s`" = "$head (no editor)"
+	test "$(git log -1 --pretty=format:%s)" = "$head (no editor)"
 
 '
 
@@ -108,40 +108,52 @@ test_expect_success 'with hook (editor)' '
 	echo "more more" >> file &&
 	git add file &&
 	GIT_EDITOR="\"\$FAKE_EDITOR\"" git commit &&
-	test "`git log -1 --pretty=format:%s`" = default
+	test "$(git log -1 --pretty=format:%s)" = default
 
 '
 
 test_expect_success 'with hook (--amend)' '
 
-	head=`git rev-parse HEAD` &&
+	head=$(git rev-parse HEAD) &&
 	echo "more" >> file &&
 	git add file &&
 	GIT_EDITOR="\"\$FAKE_EDITOR\"" git commit --amend &&
-	test "`git log -1 --pretty=format:%s`" = "$head"
+	test "$(git log -1 --pretty=format:%s)" = "$head"
 
 '
 
 test_expect_success 'with hook (-c)' '
 
-	head=`git rev-parse HEAD` &&
+	head=$(git rev-parse HEAD) &&
 	echo "more" >> file &&
 	git add file &&
 	GIT_EDITOR="\"\$FAKE_EDITOR\"" git commit -c $head &&
-	test "`git log -1 --pretty=format:%s`" = "$head"
+	test "$(git log -1 --pretty=format:%s)" = "$head"
 
 '
 
 test_expect_success 'with hook (merge)' '
 
-	head=`git rev-parse HEAD` &&
-	git checkout -b other HEAD@{1} &&
-	echo "more" >> file &&
+	test_when_finished "git checkout -f master" &&
+	git checkout -B other HEAD@{1} &&
+	echo "more" >>file &&
 	git add file &&
 	git commit -m other &&
 	git checkout - &&
-	git merge other &&
-	test "`git log -1 --pretty=format:%s`" = merge
+	git merge --no-ff other &&
+	test "$(git log -1 --pretty=format:%s)" = "merge (no editor)"
+'
+
+test_expect_success 'with hook and editor (merge)' '
+
+	test_when_finished "git checkout -f master" &&
+	git checkout -B other HEAD@{1} &&
+	echo "more" >>file &&
+	git add file &&
+	git commit -m other &&
+	git checkout - &&
+	env GIT_EDITOR="\"\$FAKE_EDITOR\"" git merge --no-ff -e other &&
+	test "$(git log -1 --pretty=format:%s)" = "merge"
 '
 
 cat > "$HOOK" <<'EOF'
@@ -151,34 +163,37 @@ EOF
 
 test_expect_success 'with failing hook' '
 
-	head=`git rev-parse HEAD` &&
+	test_when_finished "git checkout -f master" &&
+	head=$(git rev-parse HEAD) &&
 	echo "more" >> file &&
 	git add file &&
-	! GIT_EDITOR="\"\$FAKE_EDITOR\"" git commit -c $head
+	test_must_fail env GIT_EDITOR="\"\$FAKE_EDITOR\"" git commit -c $head
 
 '
 
 test_expect_success 'with failing hook (--no-verify)' '
 
-	head=`git rev-parse HEAD` &&
+	test_when_finished "git checkout -f master" &&
+	head=$(git rev-parse HEAD) &&
 	echo "more" >> file &&
 	git add file &&
-	! GIT_EDITOR="\"\$FAKE_EDITOR\"" git commit --no-verify -c $head
+	test_must_fail env GIT_EDITOR="\"\$FAKE_EDITOR\"" git commit --no-verify -c $head
 
 '
 
 test_expect_success 'with failing hook (merge)' '
 
+	test_when_finished "git checkout -f master" &&
 	git checkout -B other HEAD@{1} &&
 	echo "more" >> file &&
 	git add file &&
 	rm -f "$HOOK" &&
 	git commit -m other &&
-	write_script "$HOOK" <<-EOF
+	write_script "$HOOK" <<-EOF &&
 	exit 1
 	EOF
 	git checkout - &&
-	test_must_fail git merge other
+	test_must_fail git merge --no-ff other
 
 '
 

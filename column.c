@@ -81,8 +81,7 @@ static void compute_column_width(struct column_data *data)
  */
 static void shrink_columns(struct column_data *data)
 {
-	data->width = xrealloc(data->width,
-			       sizeof(*data->width) * data->cols);
+	REALLOC_ARRAY(data->width, data->cols);
 	while (data->rows > 1) {
 		int x, total_width, cols, rows;
 		rows = data->rows;
@@ -91,8 +90,7 @@ static void shrink_columns(struct column_data *data)
 		data->rows--;
 		data->cols = DIV_ROUND_UP(data->list->nr, data->rows);
 		if (data->cols != cols)
-			data->width = xrealloc(data->width,
-					       sizeof(*data->width) * data->cols);
+			REALLOC_ARRAY(data->width, data->cols);
 		compute_column_width(data);
 
 		total_width = strlen(data->opts.indent);
@@ -166,7 +164,7 @@ static void display_table(const struct string_list *list,
 	data.colopts = colopts;
 	data.opts = *opts;
 
-	data.len = xmalloc(sizeof(*data.len) * list->nr);
+	ALLOC_ARRAY(data.len, list->nr);
 	for (i = 0; i < list->nr; i++)
 		data.len[i] = item_length(colopts, list->items[i].string);
 
@@ -175,9 +173,8 @@ static void display_table(const struct string_list *list,
 	if (colopts & COL_DENSE)
 		shrink_columns(&data);
 
-	empty_cell = xmalloc(initial_width + 1);
+	empty_cell = xmallocz(initial_width);
 	memset(empty_cell, ' ', initial_width);
-	empty_cell[initial_width] = '\0';
 	for (y = 0; y < data.rows; y++) {
 		for (x = 0; x < data.cols; x++)
 			if (display_cell(&data, initial_width, empty_cell, x, y))
@@ -311,8 +308,8 @@ static int parse_config(unsigned int *colopts, const char *value)
 		value += strspn(value, sep);
 	}
 	/*
-	 * Setting layout implies "always" if neither always, never
-	 * nor auto is specified.
+	 * If none of "always", "never", and "auto" is specified, then setting
+	 * layout implies "always".
 	 *
 	 * Current value in COL_ENABLE_MASK is disregarded. This means if
 	 * you set column.ui = auto and pass --column=row, then "auto"
@@ -336,8 +333,9 @@ static int column_config(const char *var, const char *value,
 int git_column_config(const char *var, const char *value,
 		      const char *command, unsigned int *colopts)
 {
-	const char *it = skip_prefix(var, "column.");
-	if (!it)
+	const char *it;
+
+	if (!skip_prefix(var, "column.", &it))
 		return 0;
 
 	if (!strcmp(it, "ui"))
@@ -366,50 +364,33 @@ int parseopt_column_callback(const struct option *opt,
 }
 
 static int fd_out = -1;
-static struct child_process column_process;
+static struct child_process column_process = CHILD_PROCESS_INIT;
 
 int run_column_filter(int colopts, const struct column_options *opts)
 {
-	const char *av[10];
-	int ret, ac = 0;
-	struct strbuf sb_colopt  = STRBUF_INIT;
-	struct strbuf sb_width   = STRBUF_INIT;
-	struct strbuf sb_padding = STRBUF_INIT;
+	struct argv_array *argv;
 
 	if (fd_out != -1)
 		return -1;
 
-	av[ac++] = "column";
-	strbuf_addf(&sb_colopt, "--raw-mode=%d", colopts);
-	av[ac++] = sb_colopt.buf;
-	if (opts && opts->width) {
-		strbuf_addf(&sb_width, "--width=%d", opts->width);
-		av[ac++] = sb_width.buf;
-	}
-	if (opts && opts->indent) {
-		av[ac++] = "--indent";
-		av[ac++] = opts->indent;
-	}
-	if (opts && opts->padding) {
-		strbuf_addf(&sb_padding, "--padding=%d", opts->padding);
-		av[ac++] = sb_padding.buf;
-	}
-	av[ac] = NULL;
+	child_process_init(&column_process);
+	argv = &column_process.args;
+
+	argv_array_push(argv, "column");
+	argv_array_pushf(argv, "--raw-mode=%d", colopts);
+	if (opts && opts->width)
+		argv_array_pushf(argv, "--width=%d", opts->width);
+	if (opts && opts->indent)
+		argv_array_pushf(argv, "--indent=%s", opts->indent);
+	if (opts && opts->padding)
+		argv_array_pushf(argv, "--padding=%d", opts->padding);
 
 	fflush(stdout);
-	memset(&column_process, 0, sizeof(column_process));
 	column_process.in = -1;
 	column_process.out = dup(1);
 	column_process.git_cmd = 1;
-	column_process.argv = av;
 
-	ret = start_command(&column_process);
-
-	strbuf_release(&sb_colopt);
-	strbuf_release(&sb_width);
-	strbuf_release(&sb_padding);
-
-	if (ret)
+	if (start_command(&column_process))
 		return -2;
 
 	fd_out = dup(1);

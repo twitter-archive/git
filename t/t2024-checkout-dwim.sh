@@ -174,6 +174,18 @@ test_expect_success 'checkout of branch with a file having the same name fails' 
 	test_branch master
 '
 
+test_expect_success 'checkout of branch with a file in subdir having the same name fails' '
+	git checkout -B master &&
+	test_might_fail git branch -D spam &&
+
+	>spam &&
+	mkdir sub &&
+	mv spam sub/spam &&
+	test_must_fail git -C sub checkout spam &&
+	test_must_fail git rev-parse --verify refs/heads/spam &&
+	test_branch master
+'
+
 test_expect_success 'checkout <branch> -- succeeds, even if a file with the same name exists' '
 	git checkout -B master &&
 	test_might_fail git branch -D spam &&
@@ -183,6 +195,24 @@ test_expect_success 'checkout <branch> -- succeeds, even if a file with the same
 	test_branch spam &&
 	test_cmp_rev refs/remotes/extra_dir/repo_c/extra_dir/spam HEAD &&
 	test_branch_upstream spam repo_c spam
+'
+
+test_expect_success 'loosely defined local base branch is reported correctly' '
+
+	git checkout master &&
+	git branch strict &&
+	git branch loose &&
+	git commit --allow-empty -m "a bit more" &&
+
+	test_config branch.strict.remote . &&
+	test_config branch.loose.remote . &&
+	test_config branch.strict.merge refs/heads/master &&
+	test_config branch.loose.merge master &&
+
+	git checkout strict | sed -e "s/strict/BRANCHNAME/g" >expect &&
+	git checkout loose | sed -e "s/loose/BRANCHNAME/g" >actual &&
+
+	test_cmp expect actual
 '
 
 test_done

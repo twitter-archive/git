@@ -17,9 +17,6 @@ endif
 # because maintaining the nesting to match is a pain.  If
 # we had "elif" things would have been much nicer...
 
-ifeq ($(uname_M),x86_64)
-	XDL_FAST_HASH = YesPlease
-endif
 ifeq ($(uname_S),OSF1)
 	# Need this for u_short definitions et al
 	BASIC_CFLAGS += -D_OSF_SOURCE
@@ -28,15 +25,21 @@ ifeq ($(uname_S),OSF1)
 	NO_NSEC = YesPlease
 endif
 ifeq ($(uname_S),Linux)
+	HAVE_ALLOCA_H = YesPlease
 	NO_STRLCPY = YesPlease
-	NO_MKSTEMPS = YesPlease
 	HAVE_PATHS_H = YesPlease
 	LIBC_CONTAINS_LIBINTL = YesPlease
 	HAVE_DEV_TTY = YesPlease
+	HAVE_CLOCK_GETTIME = YesPlease
+	HAVE_CLOCK_MONOTONIC = YesPlease
+	# -lrt is needed for clock_gettime on glibc <= 2.16
+	NEEDS_LIBRT = YesPlease
+	HAVE_GETDELIM = YesPlease
+	SANE_TEXT_GREP=-a
 endif
 ifeq ($(uname_S),GNU/kFreeBSD)
+	HAVE_ALLOCA_H = YesPlease
 	NO_STRLCPY = YesPlease
-	NO_MKSTEMPS = YesPlease
 	HAVE_PATHS_H = YesPlease
 	DIR_HAS_BSD_GROUP_SEMANTICS = YesPlease
 	LIBC_CONTAINS_LIBINTL = YesPlease
@@ -50,7 +53,6 @@ ifeq ($(uname_S),UnixWare)
 	SHELL_PATH = /usr/local/bin/bash
 	NO_IPV6 = YesPlease
 	NO_HSTRERROR = YesPlease
-	NO_MKSTEMPS = YesPlease
 	BASIC_CFLAGS += -Kthread
 	BASIC_CFLAGS += -I/usr/local/include
 	BASIC_LDFLAGS += -L/usr/local/lib
@@ -74,7 +76,6 @@ ifeq ($(uname_S),SCO_SV)
 	SHELL_PATH = /usr/bin/bash
 	NO_IPV6 = YesPlease
 	NO_HSTRERROR = YesPlease
-	NO_MKSTEMPS = YesPlease
 	BASIC_CFLAGS += -I/usr/local/include
 	BASIC_LDFLAGS += -L/usr/local/lib
 	NO_STRCASESTR = YesPlease
@@ -86,27 +87,37 @@ ifeq ($(uname_S),Darwin)
 	NEEDS_CRYPTO_WITH_SSL = YesPlease
 	NEEDS_SSL_WITH_CRYPTO = YesPlease
 	NEEDS_LIBICONV = YesPlease
+	# Note: $(uname_R) gives us the underlying Darwin version.
+	# - MacOS 10.0.* and MacOS 10.1.0 = Darwin 1.*
+	# - MacOS 10.x.* = Darwin (x+4).* for (1 <= x)
+	# i.e. "begins with [15678] and a dot" means "10.4.* or older".
 	ifeq ($(shell expr "$(uname_R)" : '[15678]\.'),2)
 		OLD_ICONV = UnfortunatelyYes
+		NO_APPLE_COMMON_CRYPTO = YesPlease
 	endif
 	ifeq ($(shell expr "$(uname_R)" : '[15]\.'),2)
 		NO_STRLCPY = YesPlease
+	endif
+	ifeq ($(shell test "`expr "$(uname_R)" : '\([0-9][0-9]*\)\.'`" -ge 11 && echo 1),1)
+		HAVE_GETDELIM = YesPlease
 	endif
 	NO_MEMMEM = YesPlease
 	USE_ST_TIMESPEC = YesPlease
 	HAVE_DEV_TTY = YesPlease
 	COMPAT_OBJS += compat/precompose_utf8.o
 	BASIC_CFLAGS += -DPRECOMPOSE_UNICODE
+	BASIC_CFLAGS += -DPROTECT_HFS_DEFAULT=1
+	HAVE_BSD_SYSCTL = YesPlease
 endif
 ifeq ($(uname_S),SunOS)
 	NEEDS_SOCKET = YesPlease
 	NEEDS_NSL = YesPlease
 	SHELL_PATH = /bin/bash
 	SANE_TOOL_PATH = /usr/xpg6/bin:/usr/xpg4/bin
+	HAVE_ALLOCA_H = YesPlease
 	NO_STRCASESTR = YesPlease
 	NO_MEMMEM = YesPlease
 	NO_MKDTEMP = YesPlease
-	NO_MKSTEMPS = YesPlease
 	NO_REGEX = YesPlease
 	NO_MSGFMT_EXTENDED_OPTIONS = YesPlease
 	HAVE_DEV_TTY = YesPlease
@@ -145,19 +156,16 @@ ifeq ($(uname_S),SunOS)
 	endif
 	INSTALL = /usr/ucb/install
 	TAR = gtar
-	BASIC_CFLAGS += -D__EXTENSIONS__ -D__sun__ -DHAVE_ALLOCA_H
+	BASIC_CFLAGS += -D__EXTENSIONS__ -D__sun__
 endif
 ifeq ($(uname_O),Cygwin)
 	ifeq ($(shell expr "$(uname_R)" : '1\.[1-6]\.'),4)
 		NO_D_TYPE_IN_DIRENT = YesPlease
-		NO_D_INO_IN_DIRENT = YesPlease
 		NO_STRCASESTR = YesPlease
 		NO_MEMMEM = YesPlease
-		NO_MKSTEMPS = YesPlease
 		NO_SYMLINK_HEAD = YesPlease
 		NO_IPV6 = YesPlease
 		OLD_ICONV = UnfortunatelyYes
-		NO_THREAD_SAFE_PREAD = YesPlease
 		# There are conflicting reports about this.
 		# On some boxes NO_MMAP is needed, and not so elsewhere.
 		# Try commenting this out if you suspect MMAP is more efficient
@@ -165,12 +173,14 @@ ifeq ($(uname_O),Cygwin)
 	else
 		NO_REGEX = UnfortunatelyYes
 	endif
+	HAVE_ALLOCA_H = YesPlease
 	NEEDS_LIBICONV = YesPlease
 	NO_FAST_WORKING_DIRECTORY = UnfortunatelyYes
 	NO_ST_BLOCKS_IN_STRUCT_STAT = YesPlease
 	X = .exe
 	UNRELIABLE_FSTAT = UnfortunatelyYes
 	SPARSE_FLAGS = -isystem /usr/include/w32api -Wno-one-bit-signed-bitfield
+	OBJECT_CREATION_USES_RENAMES = UnfortunatelyNeedsTo
 endif
 ifeq ($(uname_S),FreeBSD)
 	NEEDS_LIBICONV = YesPlease
@@ -186,7 +196,11 @@ ifeq ($(uname_S),FreeBSD)
 		NO_STRTOUMAX = YesPlease
 	endif
 	PYTHON_PATH = /usr/local/bin/python
+	PERL_PATH = /usr/local/bin/perl
 	HAVE_PATHS_H = YesPlease
+	GMTIME_UNRELIABLE_ERRORS = UnfortunatelyYes
+	HAVE_BSD_SYSCTL = YesPlease
+	PAGER_ENV = LESS=FRX LV=-c MORE=FRX
 endif
 ifeq ($(uname_S),OpenBSD)
 	NO_STRCASESTR = YesPlease
@@ -196,6 +210,7 @@ ifeq ($(uname_S),OpenBSD)
 	BASIC_CFLAGS += -I/usr/local/include
 	BASIC_LDFLAGS += -L/usr/local/lib
 	HAVE_PATHS_H = YesPlease
+	HAVE_BSD_SYSCTL = YesPlease
 endif
 ifeq ($(uname_S),MirBSD)
 	NO_STRCASESTR = YesPlease
@@ -203,6 +218,7 @@ ifeq ($(uname_S),MirBSD)
 	USE_ST_TIMESPEC = YesPlease
 	NEEDS_LIBICONV = YesPlease
 	HAVE_PATHS_H = YesPlease
+	HAVE_BSD_SYSCTL = YesPlease
 endif
 ifeq ($(uname_S),NetBSD)
 	ifeq ($(shell expr "$(uname_R)" : '[01]\.'),2)
@@ -211,15 +227,14 @@ ifeq ($(uname_S),NetBSD)
 	BASIC_CFLAGS += -I/usr/pkg/include
 	BASIC_LDFLAGS += -L/usr/pkg/lib $(CC_LD_DYNPATH)/usr/pkg/lib
 	USE_ST_TIMESPEC = YesPlease
-	NO_MKSTEMPS = YesPlease
 	HAVE_PATHS_H = YesPlease
+	HAVE_BSD_SYSCTL = YesPlease
 endif
 ifeq ($(uname_S),AIX)
 	DEFAULT_PAGER = more
 	NO_STRCASESTR = YesPlease
 	NO_MEMMEM = YesPlease
 	NO_MKDTEMP = YesPlease
-	NO_MKSTEMPS = YesPlease
 	NO_STRLCPY = YesPlease
 	NO_NSEC = YesPlease
 	FREAD_READS_DIRECTORIES = UnfortunatelyYes
@@ -238,8 +253,8 @@ ifeq ($(uname_S),AIX)
 endif
 ifeq ($(uname_S),GNU)
 	# GNU/Hurd
+	HAVE_ALLOCA_H = YesPlease
 	NO_STRLCPY = YesPlease
-	NO_MKSTEMPS = YesPlease
 	HAVE_PATHS_H = YesPlease
 	LIBC_CONTAINS_LIBINTL = YesPlease
 endif
@@ -248,7 +263,6 @@ ifeq ($(uname_S),IRIX)
 	NO_UNSETENV = YesPlease
 	NO_STRCASESTR = YesPlease
 	NO_MEMMEM = YesPlease
-	NO_MKSTEMPS = YesPlease
 	NO_MKDTEMP = YesPlease
 	# When compiled with the MIPSpro 7.4.4m compiler, and without pthreads
 	# (i.e. NO_PTHREADS is set), and _with_ MMAP (i.e. NO_MMAP is not set),
@@ -267,7 +281,6 @@ ifeq ($(uname_S),IRIX64)
 	NO_UNSETENV = YesPlease
 	NO_STRCASESTR = YesPlease
 	NO_MEMMEM = YesPlease
-	NO_MKSTEMPS = YesPlease
 	NO_MKDTEMP = YesPlease
 	# When compiled with the MIPSpro 7.4.4m compiler, and without pthreads
 	# (i.e. NO_PTHREADS is set), and _with_ MMAP (i.e. NO_MMAP is not set),
@@ -287,7 +300,6 @@ ifeq ($(uname_S),HP-UX)
 	NO_SETENV = YesPlease
 	NO_STRCASESTR = YesPlease
 	NO_MEMMEM = YesPlease
-	NO_MKSTEMPS = YesPlease
 	NO_STRLCPY = YesPlease
 	NO_MKDTEMP = YesPlease
 	NO_UNSETENV = YesPlease
@@ -312,6 +324,7 @@ endif
 ifeq ($(uname_S),Windows)
 	GIT_VERSION := $(GIT_VERSION).MSVC
 	pathsep = ;
+	HAVE_ALLOCA_H = YesPlease
 	NO_PREAD = YesPlease
 	NEEDS_CRYPTO_WITH_SSL = YesPlease
 	NO_LIBGEN_H = YesPlease
@@ -320,7 +333,6 @@ ifeq ($(uname_S),Windows)
 	NO_IPV6 = YesPlease
 	NO_UNIX_SOCKETS = YesPlease
 	NO_SETENV = YesPlease
-	NO_UNSETENV = YesPlease
 	NO_STRCASESTR = YesPlease
 	NO_STRLCPY = YesPlease
 	NO_MEMMEM = YesPlease
@@ -328,10 +340,8 @@ ifeq ($(uname_S),Windows)
 	NO_ICONV = YesPlease
 	NO_STRTOUMAX = YesPlease
 	NO_MKDTEMP = YesPlease
-	NO_MKSTEMPS = YesPlease
 	SNPRINTF_RETURNS_BOGUS = YesPlease
 	NO_SVN_TESTS = YesPlease
-	NO_PERL_MAKEMAKER = YesPlease
 	RUNTIME_PREFIX = YesPlease
 	NO_ST_BLOCKS_IN_STRUCT_STAT = YesPlease
 	NO_NSEC = YesPlease
@@ -340,7 +350,6 @@ ifeq ($(uname_S),Windows)
 	UNRELIABLE_FSTAT = UnfortunatelyYes
 	OBJECT_CREATION_USES_RENAMES = UnfortunatelyNeedsTo
 	NO_REGEX = YesPlease
-	NO_CURL = YesPlease
 	NO_GETTEXT = YesPlease
 	NO_PYTHON = YesPlease
 	BLK_SHA1 = YesPlease
@@ -358,17 +367,18 @@ ifeq ($(uname_S),Windows)
 	COMPAT_OBJS = compat/msvc.o compat/winansi.o \
 		compat/win32/pthread.o compat/win32/syslog.o \
 		compat/win32/dirent.o
-	COMPAT_CFLAGS = -D__USE_MINGW_ACCESS -DNOGDI -DHAVE_STRING_H -DHAVE_ALLOCA_H -Icompat -Icompat/regex -Icompat/win32 -DSTRIP_EXTENSION=\".exe\"
-	BASIC_LDFLAGS = -IGNORE:4217 -IGNORE:4049 -NOLOGO -SUBSYSTEM:CONSOLE -NODEFAULTLIB:MSVCRT.lib
-	EXTLIBS = user32.lib advapi32.lib shell32.lib wininet.lib ws2_32.lib
+	COMPAT_CFLAGS = -D__USE_MINGW_ACCESS -DNOGDI -DHAVE_STRING_H -Icompat -Icompat/regex -Icompat/win32 -DSTRIP_EXTENSION=\".exe\"
+	BASIC_LDFLAGS = -IGNORE:4217 -IGNORE:4049 -NOLOGO -SUBSYSTEM:CONSOLE
+	EXTLIBS = user32.lib advapi32.lib shell32.lib wininet.lib ws2_32.lib invalidcontinue.obj
 	PTHREAD_LIBS =
 	lib =
+	BASIC_CFLAGS += -DPROTECT_NTFS_DEFAULT=1
 ifndef DEBUG
-	BASIC_CFLAGS += -GL -Os -MT
+	BASIC_CFLAGS += -GL -Os -MD
 	BASIC_LDFLAGS += -LTCG
 	AR += -LTCG
 else
-	BASIC_CFLAGS += -Zi -MTd
+	BASIC_CFLAGS += -Zi -MDd
 endif
 	X = .exe
 endif
@@ -379,7 +389,6 @@ ifeq ($(uname_S),Interix)
 	NO_MKDTEMP = YesPlease
 	NO_STRTOUMAX = YesPlease
 	NO_NSEC = YesPlease
-	NO_MKSTEMPS = YesPlease
 	ifeq ($(uname_R),3.5)
 		NO_INET_NTOP = YesPlease
 		NO_INET_PTON = YesPlease
@@ -438,7 +447,6 @@ ifeq ($(uname_S),NONSTOP_KERNEL)
 	NO_SETENV = YesPlease
 	NO_UNSETENV = YesPlease
 	NO_MKDTEMP = YesPlease
-	NO_MKSTEMPS = YesPlease
 	# Currently libiconv-1.9.1.
 	OLD_ICONV = UnfortunatelyYes
 	NO_REGEX = YesPlease
@@ -466,6 +474,7 @@ ifeq ($(uname_S),NONSTOP_KERNEL)
 endif
 ifneq (,$(findstring MINGW,$(uname_S)))
 	pathsep = ;
+	HAVE_ALLOCA_H = YesPlease
 	NO_PREAD = YesPlease
 	NEEDS_CRYPTO_WITH_SSL = YesPlease
 	NO_LIBGEN_H = YesPlease
@@ -473,14 +482,12 @@ ifneq (,$(findstring MINGW,$(uname_S)))
 	NO_SYMLINK_HEAD = YesPlease
 	NO_UNIX_SOCKETS = YesPlease
 	NO_SETENV = YesPlease
-	NO_UNSETENV = YesPlease
 	NO_STRCASESTR = YesPlease
 	NO_STRLCPY = YesPlease
 	NO_MEMMEM = YesPlease
 	NEEDS_LIBICONV = YesPlease
 	NO_STRTOUMAX = YesPlease
 	NO_MKDTEMP = YesPlease
-	NO_MKSTEMPS = YesPlease
 	NO_SVN_TESTS = YesPlease
 	NO_PERL_MAKEMAKER = YesPlease
 	RUNTIME_PREFIX = YesPlease
@@ -492,18 +499,17 @@ ifneq (,$(findstring MINGW,$(uname_S)))
 	OBJECT_CREATION_USES_RENAMES = UnfortunatelyNeedsTo
 	NO_REGEX = YesPlease
 	NO_PYTHON = YesPlease
-	BLK_SHA1 = YesPlease
 	ETAGS_TARGET = ETAGS
 	NO_INET_PTON = YesPlease
 	NO_INET_NTOP = YesPlease
 	NO_POSIX_GOODIES = UnfortunatelyYes
 	DEFAULT_HELP_FORMAT = html
-	COMPAT_CFLAGS += -D__USE_MINGW_ACCESS -D_USE_32BIT_TIME_T -DNOGDI -Icompat -Icompat/win32
+	COMPAT_CFLAGS += -DNOGDI -Icompat -Icompat/win32
 	COMPAT_CFLAGS += -DSTRIP_EXTENSION=\".exe\"
 	COMPAT_OBJS += compat/mingw.o compat/winansi.o \
 		compat/win32/pthread.o compat/win32/syslog.o \
 		compat/win32/dirent.o
-	BASIC_LDFLAGS += -Wl,--large-address-aware
+	BASIC_CFLAGS += -DPROTECT_NTFS_DEFAULT=1
 	EXTLIBS += -lws2_32
 	GITLIBS += git.res
 	PTHREAD_LIBS =
@@ -520,8 +526,36 @@ ifneq (,$(wildcard ../THIS_IS_MSYSGIT))
 	INTERNAL_QSORT = YesPlease
 	HAVE_LIBCHARSET_H = YesPlease
 	NO_GETTEXT = YesPlease
+	COMPAT_CLFAGS += -D__USE_MINGW_ACCESS
 else
-	NO_CURL = YesPlease
+	ifeq ($(shell expr "$(uname_R)" : '2\.'),2)
+		# MSys2
+		prefix = /usr/
+		ifeq (MINGW32,$(MSYSTEM))
+			prefix = /mingw32
+		endif
+		ifeq (MINGW64,$(MSYSTEM))
+			prefix = /mingw64
+		else
+			COMPAT_CFLAGS += -D_USE_32BIT_TIME_T
+			BASIC_LDFLAGS += -Wl,--large-address-aware
+		endif
+		CC = gcc
+		COMPAT_CFLAGS += -D__USE_MINGW_ANSI_STDIO=0 -DDETECT_MSYS_TTY
+		EXTLIBS += -lntdll
+		INSTALL = /bin/install
+		NO_R_TO_GCC_LINKER = YesPlease
+		INTERNAL_QSORT = YesPlease
+		HAVE_LIBCHARSET_H = YesPlease
+		NO_GETTEXT =
+		USE_GETTEXT_SCHEME = fallthrough
+		USE_LIBPCRE= YesPlease
+		NO_CURL =
+		USE_NED_ALLOCATOR = YesPlease
+	else
+		COMPAT_CFLAGS += -D__USE_MINGW_ANSI_STDIO
+		NO_CURL = YesPlease
+	endif
 endif
 endif
 ifeq ($(uname_S),QNX)
@@ -533,7 +567,6 @@ ifeq ($(uname_S),QNX)
 	NO_ICONV = YesPlease
 	NO_MEMMEM = YesPlease
 	NO_MKDTEMP = YesPlease
-	NO_MKSTEMPS = YesPlease
 	NO_NSEC = YesPlease
 	NO_PTHREADS = YesPlease
 	NO_R_TO_GCC_LINKER = YesPlease

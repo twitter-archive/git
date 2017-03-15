@@ -2,6 +2,7 @@
 
 test_description='git filter-branch'
 . ./test-lib.sh
+. "$TEST_DIRECTORY/lib-gpg.sh"
 
 test_expect_success 'setup' '
 	test_commit A &&
@@ -292,12 +293,46 @@ test_expect_success 'Tag name filtering strips gpg signature' '
 	test_cmp expect actual
 '
 
+test_expect_success GPG 'Filtering retains message of gpg signed commit' '
+	mkdir gpg &&
+	touch gpg/foo &&
+	git add gpg &&
+	test_tick &&
+	git commit -S -m "Adding gpg" &&
+
+	git log -1 --format="%s" > expect &&
+	git filter-branch -f --msg-filter "cat" &&
+	git log -1 --format="%s" > actual &&
+	test_cmp expect actual
+'
+
 test_expect_success 'Tag name filtering allows slashes in tag names' '
 	git tag -m tag-with-slash X/1 &&
 	git cat-file tag X/1 | sed -e s,X/1,X/2, > expect &&
 	git filter-branch -f --tag-name-filter "echo X/2" &&
 	git cat-file tag X/2 > actual &&
 	test_cmp expect actual
+'
+test_expect_success 'setup --prune-empty comparisons' '
+	git checkout --orphan master-no-a &&
+	git rm -rf . &&
+	unset test_tick &&
+	test_tick &&
+	GIT_COMMITTER_DATE="@0 +0000" GIT_AUTHOR_DATE="@0 +0000" &&
+	test_commit --notick B B.t B Bx &&
+	git checkout -b branch-no-a Bx &&
+	test_commit D D.t D Dx &&
+	mkdir dir &&
+	test_commit dir/D dir/D.t dir/D dir/Dx &&
+	test_commit E E.t E Ex &&
+	git checkout master-no-a &&
+	test_commit C C.t C Cx &&
+	git checkout branch-no-a &&
+	git merge Cx -m "Merge tag '\''C'\'' into branch" &&
+	git tag Fx &&
+	test_commit G G.t G Gx &&
+	test_commit H H.t H Hx &&
+	git checkout branch
 '
 
 test_expect_success 'Prune empty commits' '
@@ -306,6 +341,41 @@ test_expect_success 'Prune empty commits' '
 	git filter-branch -f --index-filter "git update-index --remove to_remove.t" --prune-empty HEAD &&
 	git rev-list HEAD > actual &&
 	test_cmp expect actual
+'
+
+test_expect_success 'prune empty collapsed merges' '
+	test_config merge.ff false &&
+	git rev-list HEAD >expect &&
+	test_commit to_remove_2 &&
+	git reset --hard HEAD^ &&
+	test_merge non-ff to_remove_2 &&
+	git filter-branch -f --index-filter "git update-index --remove to_remove_2.t" --prune-empty HEAD &&
+	git rev-list HEAD >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'prune empty works even without index/tree filters' '
+	git rev-list HEAD >expect &&
+	git commit --allow-empty -m empty &&
+	git filter-branch -f --prune-empty HEAD &&
+	git rev-list HEAD >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success '--prune-empty is able to prune root commit' '
+	git rev-list branch-no-a >expect &&
+	git branch testing H &&
+	git filter-branch -f --prune-empty --index-filter "git update-index --remove A.t" testing &&
+	git rev-list testing >actual &&
+	git branch -D testing &&
+	test_cmp expect actual
+'
+
+test_expect_success '--prune-empty is able to prune entire branch' '
+	git branch prune-entire B &&
+	git filter-branch -f --prune-empty --index-filter "git update-index --remove A.t B.t" prune-entire &&
+	test_path_is_missing .git/refs/heads/prune-entire &&
+	test_must_fail git reflog exists refs/heads/prune-entire
 '
 
 test_expect_success '--remap-to-ancestor with filename filters' '
@@ -362,7 +432,7 @@ test_expect_success 'setup submodule' '
 	git branch original HEAD
 '
 
-orig_head=`git show-ref --hash --head HEAD`
+orig_head=$(git show-ref --hash --head HEAD)
 
 test_expect_success 'rewrite submodule with another content' '
 	git filter-branch --tree-filter "test -d submod && {
@@ -371,7 +441,7 @@ test_expect_success 'rewrite submodule with another content' '
 					 mkdir submod &&
 					 : > submod/file
 					 } || :" HEAD &&
-	test $orig_head != `git show-ref --hash --head HEAD`
+	test $orig_head != $(git show-ref --hash --head HEAD)
 '
 
 test_expect_success 'replace submodule revision' '
@@ -380,7 +450,24 @@ test_expect_success 'replace submodule revision' '
 	    "if git ls-files --error-unmatch -- submod > /dev/null 2>&1
 	     then git update-index --cacheinfo 160000 0123456789012345678901234567890123456789 submod
 	     fi" HEAD &&
-	test $orig_head != `git show-ref --hash --head HEAD`
+	test $orig_head != $(git show-ref --hash --head HEAD)
+'
+
+test_expect_success 'filter commit message without trailing newline' '
+	git reset --hard original &&
+	commit=$(printf "no newline" | git commit-tree HEAD^{tree}) &&
+	git update-ref refs/heads/no-newline $commit &&
+	git filter-branch -f refs/heads/no-newline &&
+	echo $commit >expect &&
+	git rev-parse refs/heads/no-newline >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'tree-filter deals with object name vs pathname ambiguity' '
+	test_when_finished "git reset --hard original" &&
+	ambiguous=$(git rev-list -1 HEAD) &&
+	git filter-branch --tree-filter "mv file.t $ambiguous" HEAD^.. &&
+	git show HEAD:$ambiguous
 '
 
 test_done

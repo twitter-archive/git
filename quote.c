@@ -4,9 +4,15 @@
 
 int quote_path_fully = 1;
 
+static inline int need_bs_quote(char c)
+{
+	return (c == '\'' || c == '!');
+}
+
 /* Help to copy the thing properly quoted for the shell safety.
  * any single quote is replaced with '\'', any exclamation point
  * is replaced with '\!', and the whole thing is enclosed in a
+ * single quote pair.
  *
  * E.g.
  *  original     sq_quote     result
@@ -15,11 +21,6 @@ int quote_path_fully = 1;
  *  a'b      ==> a'\''b    ==> 'a'\''b'
  *  a!b      ==> a'\!'b    ==> 'a'\!'b'
  */
-static inline int need_bs_quote(char c)
-{
-	return (c == '\'' || c == '!');
-}
-
 void sq_quote_buf(struct strbuf *dst, const char *src)
 {
 	char *to_free = NULL;
@@ -40,6 +41,19 @@ void sq_quote_buf(struct strbuf *dst, const char *src)
 	}
 	strbuf_addch(dst, '\'');
 	free(to_free);
+}
+
+void sq_quotef(struct strbuf *dst, const char *fmt, ...)
+{
+	struct strbuf src = STRBUF_INIT;
+
+	va_list ap;
+	va_start(ap, fmt);
+	strbuf_vaddf(&src, fmt, ap);
+	va_end(ap);
+
+	sq_quote_buf(dst, src.buf);
+	strbuf_release(&src);
 }
 
 void sq_quote_argv(struct strbuf *dst, const char** argv, size_t maxlen)
@@ -274,27 +288,6 @@ void write_name_quoted(const char *name, FILE *fp, int terminator)
 	fputc(terminator, fp);
 }
 
-void write_name_quotedpfx(const char *pfx, size_t pfxlen,
-			  const char *name, FILE *fp, int terminator)
-{
-	int needquote = 0;
-
-	if (terminator) {
-		needquote = next_quote_pos(pfx, pfxlen) < pfxlen
-			|| name[next_quote_pos(name, -1)];
-	}
-	if (needquote) {
-		fputc('"', fp);
-		quote_c_style_counted(pfx, pfxlen, NULL, fp, 1);
-		quote_c_style(name, NULL, fp, 1);
-		fputc('"', fp);
-	} else {
-		fwrite(pfx, pfxlen, 1, fp);
-		fputs(name, fp);
-	}
-	fputc(terminator, fp);
-}
-
 void write_name_quoted_relative(const char *name, const char *prefix,
 				FILE *fp, int terminator)
 {
@@ -459,4 +452,41 @@ void tcl_quote_buf(struct strbuf *sb, const char *src)
 		}
 	}
 	strbuf_addch(sb, '"');
+}
+
+void basic_regex_quote_buf(struct strbuf *sb, const char *src)
+{
+	char c;
+
+	if (*src == '^') {
+		/* only beginning '^' is special and needs quoting */
+		strbuf_addch(sb, '\\');
+		strbuf_addch(sb, *src++);
+	}
+	if (*src == '*')
+		/* beginning '*' is not special, no quoting */
+		strbuf_addch(sb, *src++);
+
+	while ((c = *src++)) {
+		switch (c) {
+		case '[':
+		case '.':
+		case '\\':
+		case '*':
+			strbuf_addch(sb, '\\');
+			strbuf_addch(sb, c);
+			break;
+
+		case '$':
+			/* only the end '$' is special and needs quoting */
+			if (*src == '\0')
+				strbuf_addch(sb, '\\');
+			strbuf_addch(sb, c);
+			break;
+
+		default:
+			strbuf_addch(sb, c);
+			break;
+		}
+	}
 }

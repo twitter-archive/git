@@ -246,13 +246,20 @@ $highlight_bin::
 	Note that 'highlight' feature must be set for gitweb to actually
 	use syntax highlighting.
 +
-*NOTE*: if you want to add support for new file type (supported by
-"highlight" but not used by gitweb), you need to modify `%highlight_ext`
-or `%highlight_basename`, depending on whether you detect type of file
-based on extension (for example "sh") or on its basename (for example
-"Makefile").  The keys of these hashes are extension and basename,
-respectively, and value for given key is name of syntax to be passed via
-`--syntax <syntax>` to highlighter.
+*NOTE*: for a file to be highlighted, its syntax type must be detected
+and that syntax must be supported by "highlight".  The default syntax
+detection is minimal, and there are many supported syntax types with no
+detection by default.  There are three options for adding syntax
+detection.  The first and second priority are `%highlight_basename` and
+`%highlight_ext`, which detect based on basename (the full filename, for
+example "Makefile") and extension (for example "sh").  The keys of these
+hashes are the basename and extension, respectively, and the value for a
+given key is the name of the syntax to be passed via `--syntax <syntax>`
+to "highlight".  The last priority is the "highlight" configuration of
+`Shebang` regular expressions to detect the language based on the first
+line in the file, (for example, matching the line "#!/bin/bash").  See
+the highlight documentation and the default config at
+/etc/highlight/filetypes.conf for more details.
 +
 For example if repositories you are hosting use "phtml" extension for
 PHP files, and you want to have correct syntax-highlighting for those
@@ -376,7 +383,7 @@ $site_name::
 	Name of your site or organization, to appear in page titles.  Set it
 	to something descriptive for clearer bookmarks etc.  If this variable
 	is not set or is, then gitweb uses the value of the `SERVER_NAME`
-	CGI environment variable, setting site name to "$SERVER_NAME Git",
+	`CGI` environment variable, setting site name to "$SERVER_NAME Git",
 	or "Untitled Git" if this variable is not set (e.g. if running gitweb
 	as standalone script).
 +
@@ -482,12 +489,12 @@ project config.  Per-repository configuration takes precedence over value
 composed from `@git_base_url_list` elements and project name.
 +
 You can setup one single value (single entry/item in this list) at build
-time by setting the `GITWEB_BASE_URL` built-time configuration variable.
+time by setting the `GITWEB_BASE_URL` build-time configuration variable.
 By default it is set to (), i.e. an empty list.  This means that gitweb
 would not try to create project URL (to fetch) from project name.
 
 $projects_list_group_categories::
-	Whether to enables the grouping of projects by category on the project
+	Whether to enable the grouping of projects by category on the project
 	list page. The category of a project is determined by the
 	`$GIT_DIR/category` file or the `gitweb.category` variable in each
 	repository's configuration.  Disabled by default (set to 0).
@@ -706,7 +713,7 @@ show-sizes::
 	I/O.  Enabled by default.
 +
 This feature can be configured on a per-repository basis via
-repository's `gitweb.showsizes` configuration variable (boolean).
+repository's `gitweb.showSizes` configuration variable (boolean).
 
 patches::
 	Enable and configure "patches" view, which displays list of commits in email
@@ -904,7 +911,7 @@ the following in your GITWEB_CONFIG file:
 	$feature{'snapshot'}{'override'} = 1;
 
 If you allow overriding for the snapshot feature, you can specify which
-snapshot formats are globally disabled. You can also add any command line
+snapshot formats are globally disabled. You can also add any command-line
 options you want (such as setting the compression level). For instance, you
 can disable Zip compressed snapshots and set *gzip*(1) to run at level 6 by
 adding the following lines to your gitweb configuration file:

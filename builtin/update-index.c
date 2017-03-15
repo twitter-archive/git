@@ -4,6 +4,7 @@
  * Copyright (C) Linus Torvalds, 2005
  */
 #include "cache.h"
+#include "lockfile.h"
 #include "quote.h"
 #include "cache-tree.h"
 #include "tree-walk.h"
@@ -13,6 +14,7 @@
 #include "parse-options.h"
 #include "pathspec.h"
 #include "dir.h"
+#include "split-index.h"
 
 /*
  * Default to not allowing changes to the list of files. The
@@ -31,6 +33,16 @@ static int mark_valid_only;
 static int mark_skip_worktree_only;
 #define MARK_FLAG 1
 #define UNMARK_FLAG 2
+static struct strbuf mtime_dir = STRBUF_INIT;
+
+/* Untracked cache mode */
+enum uc_mode {
+	UC_UNSPECIFIED = -1,
+	UC_DISABLE = 0,
+	UC_ENABLE,
+	UC_TEST,
+	UC_FORCE
+};
 
 __attribute__((format (printf, 1, 2)))
 static void report(const char *fmt, ...)
@@ -46,6 +58,166 @@ static void report(const char *fmt, ...)
 	va_end(vp);
 }
 
+static void remove_test_directory(void)
+{
+	if (mtime_dir.len)
+		remove_dir_recursively(&mtime_dir, 0);
+}
+
+static const char *get_mtime_path(const char *path)
+{
+	static struct strbuf sb = STRBUF_INIT;
+	strbuf_reset(&sb);
+	strbuf_addf(&sb, "%s/%s", mtime_dir.buf, path);
+	return sb.buf;
+}
+
+static void xmkdir(const char *path)
+{
+	path = get_mtime_path(path);
+	if (mkdir(path, 0700))
+		die_errno(_("failed to create directory %s"), path);
+}
+
+static int xstat_mtime_dir(struct stat *st)
+{
+	if (stat(mtime_dir.buf, st))
+		die_errno(_("failed to stat %s"), mtime_dir.buf);
+	return 0;
+}
+
+static int create_file(const char *path)
+{
+	int fd;
+	path = get_mtime_path(path);
+	fd = open(path, O_CREAT | O_RDWR, 0644);
+	if (fd < 0)
+		die_errno(_("failed to create file %s"), path);
+	return fd;
+}
+
+static void xunlink(const char *path)
+{
+	path = get_mtime_path(path);
+	if (unlink(path))
+		die_errno(_("failed to delete file %s"), path);
+}
+
+static void xrmdir(const char *path)
+{
+	path = get_mtime_path(path);
+	if (rmdir(path))
+		die_errno(_("failed to delete directory %s"), path);
+}
+
+static void avoid_racy(void)
+{
+	/*
+	 * not use if we could usleep(10) if USE_NSEC is defined. The
+	 * field nsec could be there, but the OS could choose to
+	 * ignore it?
+	 */
+	sleep(1);
+}
+
+static int test_if_untracked_cache_is_supported(void)
+{
+	struct stat st;
+	struct stat_data base;
+	int fd, ret = 0;
+
+	strbuf_addstr(&mtime_dir, "mtime-test-XXXXXX");
+	if (!mkdtemp(mtime_dir.buf))
+		die_errno("Could not make temporary directory");
+
+	fprintf(stderr, _("Testing mtime in '%s' "), xgetcwd());
+	atexit(remove_test_directory);
+	xstat_mtime_dir(&st);
+	fill_stat_data(&base, &st);
+	fputc('.', stderr);
+
+	avoid_racy();
+	fd = create_file("newfile");
+	xstat_mtime_dir(&st);
+	if (!match_stat_data(&base, &st)) {
+		close(fd);
+		fputc('\n', stderr);
+		fprintf_ln(stderr,_("directory stat info does not "
+				    "change after adding a new file"));
+		goto done;
+	}
+	fill_stat_data(&base, &st);
+	fputc('.', stderr);
+
+	avoid_racy();
+	xmkdir("new-dir");
+	xstat_mtime_dir(&st);
+	if (!match_stat_data(&base, &st)) {
+		close(fd);
+		fputc('\n', stderr);
+		fprintf_ln(stderr, _("directory stat info does not change "
+				     "after adding a new directory"));
+		goto done;
+	}
+	fill_stat_data(&base, &st);
+	fputc('.', stderr);
+
+	avoid_racy();
+	write_or_die(fd, "data", 4);
+	close(fd);
+	xstat_mtime_dir(&st);
+	if (match_stat_data(&base, &st)) {
+		fputc('\n', stderr);
+		fprintf_ln(stderr, _("directory stat info changes "
+				     "after updating a file"));
+		goto done;
+	}
+	fputc('.', stderr);
+
+	avoid_racy();
+	close(create_file("new-dir/new"));
+	xstat_mtime_dir(&st);
+	if (match_stat_data(&base, &st)) {
+		fputc('\n', stderr);
+		fprintf_ln(stderr, _("directory stat info changes after "
+				     "adding a file inside subdirectory"));
+		goto done;
+	}
+	fputc('.', stderr);
+
+	avoid_racy();
+	xunlink("newfile");
+	xstat_mtime_dir(&st);
+	if (!match_stat_data(&base, &st)) {
+		fputc('\n', stderr);
+		fprintf_ln(stderr, _("directory stat info does not "
+				     "change after deleting a file"));
+		goto done;
+	}
+	fill_stat_data(&base, &st);
+	fputc('.', stderr);
+
+	avoid_racy();
+	xunlink("new-dir/new");
+	xrmdir("new-dir");
+	xstat_mtime_dir(&st);
+	if (!match_stat_data(&base, &st)) {
+		fputc('\n', stderr);
+		fprintf_ln(stderr, _("directory stat info does not "
+				     "change after deleting a directory"));
+		goto done;
+	}
+
+	if (rmdir(mtime_dir.buf))
+		die_errno(_("failed to delete directory %s"), mtime_dir.buf);
+	fprintf_ln(stderr, _(" OK"));
+	ret = 1;
+
+done:
+	strbuf_release(&mtime_dir);
+	return ret;
+}
+
 static int mark_ce_flags(const char *path, int flag, int mark)
 {
 	int namelen = strlen(path);
@@ -55,8 +227,9 @@ static int mark_ce_flags(const char *path, int flag, int mark)
 			active_cache[pos]->ce_flags |= flag;
 		else
 			active_cache[pos]->ce_flags &= ~flag;
-		cache_tree_invalidate_path(active_cache_tree, path);
-		active_cache_changed = 1;
+		active_cache[pos]->ce_flags |= CE_UPDATE_IN_BASE;
+		cache_tree_invalidate_path(&the_index, path);
+		active_cache_changed |= CE_ENTRY_CHANGED;
 		return 0;
 	}
 	return -1;
@@ -82,7 +255,7 @@ static int process_lstat_error(const char *path, int err)
 {
 	if (err == ENOENT || err == ENOTDIR)
 		return remove_one_path(path);
-	return error("lstat(\"%s\"): %s", path, strerror(errno));
+	return error("lstat(\"%s\"): %s", path, strerror(err));
 }
 
 static int add_one_path(const struct cache_entry *old, const char *path, int len, struct stat *st)
@@ -102,7 +275,7 @@ static int add_one_path(const struct cache_entry *old, const char *path, int len
 	fill_stat_cache_info(ce, st);
 	ce->ce_mode = ce_mode_from_stat(old, st->st_mode);
 
-	if (index_path(ce->sha1, path, st,
+	if (index_path(ce->oid.hash, path, st,
 		       info_only ? 0 : HASH_WRITE_OBJECT)) {
 		free(ce);
 		return -1;
@@ -139,7 +312,7 @@ static int add_one_path(const struct cache_entry *old, const char *path, int len
  */
 static int process_directory(const char *path, int len, struct stat *st)
 {
-	unsigned char sha1[20];
+	struct object_id oid;
 	int pos = cache_name_pos(path, len);
 
 	/* Exact match: file or existing gitlink */
@@ -148,7 +321,7 @@ static int process_directory(const char *path, int len, struct stat *st)
 		if (S_ISGITLINK(ce->ce_mode)) {
 
 			/* Do nothing to the index if there is no HEAD! */
-			if (resolve_gitlink_ref(path, "HEAD", sha1) < 0)
+			if (resolve_gitlink_ref(path, "HEAD", oid.hash) < 0)
 				return 0;
 
 			return add_one_path(ce, path, len, st);
@@ -174,7 +347,7 @@ static int process_directory(const char *path, int len, struct stat *st)
 	}
 
 	/* No match - should we add it as a gitlink? */
-	if (!resolve_gitlink_ref(path, "HEAD", sha1))
+	if (!resolve_gitlink_ref(path, "HEAD", oid.hash))
 		return add_one_path(NULL, path, len, st);
 
 	/* Error out. */
@@ -217,7 +390,7 @@ static int process_path(const char *path)
 	return add_one_path(ce, path, len, &st);
 }
 
-static int add_cacheinfo(unsigned int mode, const unsigned char *sha1,
+static int add_cacheinfo(unsigned int mode, const struct object_id *oid,
 			 const char *path, int stage)
 {
 	int size, len, option;
@@ -230,7 +403,7 @@ static int add_cacheinfo(unsigned int mode, const unsigned char *sha1,
 	size = cache_entry_size(len);
 	ce = xcalloc(1, size);
 
-	hashcpy(ce->sha1, sha1);
+	oidcpy(&ce->oid, oid);
 	memcpy(ce->name, path, len);
 	ce->ce_flags = create_ce_flags(stage);
 	ce->ce_namelen = len;
@@ -246,29 +419,18 @@ static int add_cacheinfo(unsigned int mode, const unsigned char *sha1,
 	return 0;
 }
 
-static void chmod_path(int flip, const char *path)
+static void chmod_path(char flip, const char *path)
 {
 	int pos;
 	struct cache_entry *ce;
-	unsigned int mode;
 
 	pos = cache_name_pos(path, strlen(path));
 	if (pos < 0)
 		goto fail;
 	ce = active_cache[pos];
-	mode = ce->ce_mode;
-	if (!S_ISREG(mode))
+	if (chmod_cache_entry(ce, flip) < 0)
 		goto fail;
-	switch (flip) {
-	case '+':
-		ce->ce_mode |= 0111; break;
-	case '-':
-		ce->ce_mode &= ~0111; break;
-	default:
-		goto fail;
-	}
-	cache_tree_invalidate_path(active_cache_tree, path);
-	active_cache_changed = 1;
+
 	report("chmod %cx '%s'", flip, path);
 	return;
  fail:
@@ -303,15 +465,17 @@ static void update_one(const char *path)
 	report("add '%s'", path);
 }
 
-static void read_index_info(int line_termination)
+static void read_index_info(int nul_term_line)
 {
 	struct strbuf buf = STRBUF_INIT;
 	struct strbuf uq = STRBUF_INIT;
+	strbuf_getline_fn getline_fn;
 
-	while (strbuf_getline(&buf, stdin, line_termination) != EOF) {
+	getline_fn = nul_term_line ? strbuf_getline_nul : strbuf_getline_lf;
+	while (getline_fn(&buf, stdin) != EOF) {
 		char *ptr, *tab;
 		char *path_name;
-		unsigned char sha1[20];
+		struct object_id oid;
 		unsigned int mode;
 		unsigned long ul;
 		int stage;
@@ -340,7 +504,7 @@ static void read_index_info(int line_termination)
 		mode = ul;
 
 		tab = strchr(ptr, '\t');
-		if (!tab || tab - ptr < 41)
+		if (!tab || tab - ptr < GIT_SHA1_HEXSZ + 1)
 			goto bad_line;
 
 		if (tab[-2] == ' ' && '0' <= tab[-1] && tab[-1] <= '3') {
@@ -353,11 +517,12 @@ static void read_index_info(int line_termination)
 			ptr = tab + 1; /* point at the head of path */
 		}
 
-		if (get_sha1_hex(tab - 40, sha1) || tab[-41] != ' ')
+		if (get_oid_hex(tab - GIT_SHA1_HEXSZ, &oid) ||
+			tab[-(GIT_SHA1_HEXSZ + 1)] != ' ')
 			goto bad_line;
 
 		path_name = ptr;
-		if (line_termination && path_name[0] == '"') {
+		if (!nul_term_line && path_name[0] == '"') {
 			strbuf_reset(&uq);
 			if (unquote_c_style(&uq, path_name, NULL)) {
 				die("git update-index: bad quoting of path name");
@@ -381,8 +546,8 @@ static void read_index_info(int line_termination)
 			 * ptr[-1] points at tab,
 			 * ptr[-41] is at the beginning of sha1
 			 */
-			ptr[-42] = ptr[-1] = 0;
-			if (add_cacheinfo(mode, sha1, path_name, stage))
+			ptr[-(GIT_SHA1_HEXSZ + 2)] = ptr[-1] = 0;
+			if (add_cacheinfo(mode, &oid, path_name, stage))
 				die("git update-index: unable to update %s",
 				    path_name);
 		}
@@ -396,23 +561,23 @@ static void read_index_info(int line_termination)
 }
 
 static const char * const update_index_usage[] = {
-	N_("git update-index [options] [--] [<file>...]"),
+	N_("git update-index [<options>] [--] [<file>...]"),
 	NULL
 };
 
-static unsigned char head_sha1[20];
-static unsigned char merge_head_sha1[20];
+static struct object_id head_oid;
+static struct object_id merge_head_oid;
 
 static struct cache_entry *read_one_ent(const char *which,
-					unsigned char *ent, const char *path,
+					struct object_id *ent, const char *path,
 					int namelen, int stage)
 {
 	unsigned mode;
-	unsigned char sha1[20];
+	struct object_id oid;
 	int size;
 	struct cache_entry *ce;
 
-	if (get_tree_entry(ent, path, sha1, &mode)) {
+	if (get_tree_entry(ent->hash, path, oid.hash, &mode)) {
 		if (which)
 			error("%s: not in %s branch.", path, which);
 		return NULL;
@@ -425,7 +590,7 @@ static struct cache_entry *read_one_ent(const char *which,
 	size = cache_entry_size(namelen);
 	ce = xcalloc(1, size);
 
-	hashcpy(ce->sha1, sha1);
+	oidcpy(&ce->oid, &oid);
 	memcpy(ce->name, path, namelen);
 	ce->ce_flags = create_ce_flags(stage);
 	ce->ce_namelen = namelen;
@@ -475,14 +640,14 @@ static int unresolve_one(const char *path)
 	 * stuff HEAD version in stage #2,
 	 * stuff MERGE_HEAD version in stage #3.
 	 */
-	ce_2 = read_one_ent("our", head_sha1, path, namelen, 2);
-	ce_3 = read_one_ent("their", merge_head_sha1, path, namelen, 3);
+	ce_2 = read_one_ent("our", &head_oid, path, namelen, 2);
+	ce_3 = read_one_ent("their", &merge_head_oid, path, namelen, 3);
 
 	if (!ce_2 || !ce_3) {
 		ret = -1;
 		goto free_return;
 	}
-	if (!hashcmp(ce_2->sha1, ce_3->sha1) &&
+	if (!oidcmp(&ce_2->oid, &ce_3->oid) &&
 	    ce_2->ce_mode == ce_3->ce_mode) {
 		fprintf(stderr, "%s: identical in both, skipping.\n",
 			path);
@@ -507,9 +672,9 @@ static int unresolve_one(const char *path)
 
 static void read_head_pointers(void)
 {
-	if (read_ref("HEAD", head_sha1))
+	if (read_ref("HEAD", head_oid.hash))
 		die("No HEAD -- no initial commit yet?");
-	if (read_ref("MERGE_HEAD", merge_head_sha1)) {
+	if (read_ref("MERGE_HEAD", merge_head_oid.hash)) {
 		fprintf(stderr, "Not in the middle of a merge.\n");
 		exit(0);
 	}
@@ -528,10 +693,9 @@ static int do_unresolve(int ac, const char **av,
 
 	for (i = 1; i < ac; i++) {
 		const char *arg = av[i];
-		const char *p = prefix_path(prefix, prefix_length, arg);
+		char *p = prefix_path(prefix, prefix_length, arg);
 		err |= unresolve_one(p);
-		if (p < arg || p > arg + strlen(arg))
-			free((char *)p);
+		free(p);
 	}
 	return err;
 }
@@ -550,7 +714,7 @@ static int do_reupdate(int ac, const char **av,
 		       PATHSPEC_PREFER_CWD,
 		       prefix, av + 1);
 
-	if (read_ref("HEAD", head_sha1))
+	if (read_ref("HEAD", head_oid.hash))
 		/* If there is no HEAD, that means it is an initial
 		 * commit.  Update everything in the index.
 		 */
@@ -565,10 +729,10 @@ static int do_reupdate(int ac, const char **av,
 		if (ce_stage(ce) || !ce_path_match(ce, &pathspec, NULL))
 			continue;
 		if (has_head)
-			old = read_one_ent(NULL, head_sha1,
+			old = read_one_ent(NULL, &head_oid,
 					   ce->name, ce_namelen(ce), 0);
 		if (old && ce->ce_mode == old->ce_mode &&
-		    !hashcmp(ce->sha1, old->sha1)) {
+		    !oidcmp(&ce->oid, &old->oid)) {
 			free(old);
 			continue; /* unchanged */
 		}
@@ -580,10 +744,11 @@ static int do_reupdate(int ac, const char **av,
 		path = xstrdup(ce->name);
 		update_one(path);
 		free(path);
+		free(old);
 		if (save_nr != active_nr)
 			goto redo;
 	}
-	free_pathspec(&pathspec);
+	clear_pathspec(&pathspec);
 	return 0;
 }
 
@@ -629,17 +794,48 @@ static int resolve_undo_clear_callback(const struct option *opt,
 	return 0;
 }
 
+static int parse_new_style_cacheinfo(const char *arg,
+				     unsigned int *mode,
+				     struct object_id *oid,
+				     const char **path)
+{
+	unsigned long ul;
+	char *endp;
+
+	if (!arg)
+		return -1;
+
+	errno = 0;
+	ul = strtoul(arg, &endp, 8);
+	if (errno || endp == arg || *endp != ',' || (unsigned int) ul != ul)
+		return -1; /* not a new-style cacheinfo */
+	*mode = ul;
+	endp++;
+	if (get_oid_hex(endp, oid) || endp[GIT_SHA1_HEXSZ] != ',')
+		return -1;
+	*path = endp + GIT_SHA1_HEXSZ + 1;
+	return 0;
+}
+
 static int cacheinfo_callback(struct parse_opt_ctx_t *ctx,
 				const struct option *opt, int unset)
 {
-	unsigned char sha1[20];
+	struct object_id oid;
 	unsigned int mode;
+	const char *path;
 
+	if (!parse_new_style_cacheinfo(ctx->argv[1], &mode, &oid, &path)) {
+		if (add_cacheinfo(mode, &oid, path, 0))
+			die("git update-index: --cacheinfo cannot add %s", path);
+		ctx->argv++;
+		ctx->argc--;
+		return 0;
+	}
 	if (ctx->argc <= 3)
-		return error("option 'cacheinfo' expects three arguments");
+		return error("option 'cacheinfo' expects <mode>,<sha1>,<path>");
 	if (strtoul_ui(*++ctx->argv, 8, &mode) ||
-	    get_sha1_hex(*++ctx->argv, sha1) ||
-	    add_cacheinfo(mode, sha1, *++ctx->argv, 0))
+	    get_oid_hex(*++ctx->argv, &oid) ||
+	    add_cacheinfo(mode, &oid, *++ctx->argv, 0))
 		die("git update-index: --cacheinfo cannot add %s", *ctx->argv);
 	ctx->argc -= 3;
 	return 0;
@@ -648,12 +844,12 @@ static int cacheinfo_callback(struct parse_opt_ctx_t *ctx,
 static int stdin_cacheinfo_callback(struct parse_opt_ctx_t *ctx,
 			      const struct option *opt, int unset)
 {
-	int *line_termination = opt->value;
+	int *nul_term_line = opt->value;
 
 	if (ctx->argc != 1)
 		return error("option '%s' must be the last argument", opt->long_name);
 	allow_add = allow_replace = allow_remove = 1;
-	read_index_info(*line_termination);
+	read_index_info(*nul_term_line);
 	return 0;
 }
 
@@ -705,15 +901,18 @@ static int reupdate_callback(struct parse_opt_ctx_t *ctx,
 
 int cmd_update_index(int argc, const char **argv, const char *prefix)
 {
-	int newfd, entries, has_errors = 0, line_termination = '\n';
+	int newfd, entries, has_errors = 0, nul_term_line = 0;
+	enum uc_mode untracked_cache = UC_UNSPECIFIED;
 	int read_from_stdin = 0;
 	int prefix_length = prefix ? strlen(prefix) : 0;
 	int preferred_index_format = 0;
 	char set_executable_bit = 0;
 	struct refresh_params refresh_args = {0, &has_errors};
 	int lock_error = 0;
+	int split_index = -1;
 	struct lock_file *lock_file;
 	struct parse_opt_ctx_t ctx;
+	strbuf_getline_fn getline_fn;
 	int parseopt_state = PARSE_OPT_UNKNOWN;
 	struct option options[] = {
 		OPT_BIT('q', NULL, &refresh_args.flags,
@@ -740,9 +939,9 @@ int cmd_update_index(int argc, const char **argv, const char *prefix)
 			PARSE_OPT_NOARG | PARSE_OPT_NONEG,
 			really_refresh_callback},
 		{OPTION_LOWLEVEL_CALLBACK, 0, "cacheinfo", NULL,
-			N_("<mode> <object> <path>"),
+			N_("<mode>,<object>,<path>"),
 			N_("add the specified entry to the index"),
-			PARSE_OPT_NOARG |	/* disallow --cacheinfo=<mode> form */
+			PARSE_OPT_NOARG | /* disallow --cacheinfo=<mode> form */
 			PARSE_OPT_NONEG | PARSE_OPT_LITERAL_ARGHELP,
 			(parse_opt_cb *) cacheinfo_callback},
 		{OPTION_CALLBACK, 0, "chmod", &set_executable_bit, N_("(+/-)x"),
@@ -765,13 +964,13 @@ int cmd_update_index(int argc, const char **argv, const char *prefix)
 			N_("add to index only; do not add content to object database"), 1),
 		OPT_SET_INT(0, "force-remove", &force_remove,
 			N_("remove named paths even if present in worktree"), 1),
-		OPT_SET_INT('z', NULL, &line_termination,
-			N_("with --stdin: input lines are terminated by null bytes"), '\0'),
+		OPT_BOOL('z', NULL, &nul_term_line,
+			 N_("with --stdin: input lines are terminated by null bytes")),
 		{OPTION_LOWLEVEL_CALLBACK, 0, "stdin", &read_from_stdin, NULL,
 			N_("read list of paths to be updated from standard input"),
 			PARSE_OPT_NONEG | PARSE_OPT_NOARG,
 			(parse_opt_cb *) stdin_callback},
-		{OPTION_LOWLEVEL_CALLBACK, 0, "index-info", &line_termination, NULL,
+		{OPTION_LOWLEVEL_CALLBACK, 0, "index-info", &nul_term_line, NULL,
 			N_("add entries from standard input to the index"),
 			PARSE_OPT_NONEG | PARSE_OPT_NOARG,
 			(parse_opt_cb *) stdin_cacheinfo_callback},
@@ -794,6 +993,14 @@ int cmd_update_index(int argc, const char **argv, const char *prefix)
 			resolve_undo_clear_callback},
 		OPT_INTEGER(0, "index-version", &preferred_index_format,
 			N_("write index in this format")),
+		OPT_BOOL(0, "split-index", &split_index,
+			N_("enable or disable split index")),
+		OPT_BOOL(0, "untracked-cache", &untracked_cache,
+			N_("enable/disable untracked cache")),
+		OPT_SET_INT(0, "test-untracked-cache", &untracked_cache,
+			    N_("test if the filesystem supports untracked cache"), UC_TEST),
+		OPT_SET_INT(0, "force-untracked-cache", &untracked_cache,
+			    N_("enable untracked cache without testing the filesystem"), UC_FORCE),
 		OPT_END()
 	};
 
@@ -805,6 +1012,7 @@ int cmd_update_index(int argc, const char **argv, const char *prefix)
 	/* We can't free this memory, it becomes part of a linked list parsed atexit() */
 	lock_file = xcalloc(1, sizeof(struct lock_file));
 
+	/* we will diagnose later if it turns out that we need to update it */
 	newfd = hold_locked_index(lock_file, 0);
 	if (newfd < 0)
 		lock_error = errno;
@@ -832,14 +1040,14 @@ int cmd_update_index(int argc, const char **argv, const char *prefix)
 		case PARSE_OPT_DONE:
 		{
 			const char *path = ctx.argv[0];
-			const char *p;
+			char *p;
 
 			setup_work_tree();
 			p = prefix_path(prefix, prefix_length, path);
 			update_one(p);
 			if (set_executable_bit)
 				chmod_path(set_executable_bit, p);
-			free((char *)p);
+			free(p);
 			ctx.argc--;
 			ctx.argv++;
 			break;
@@ -853,6 +1061,8 @@ int cmd_update_index(int argc, const char **argv, const char *prefix)
 		}
 	}
 	argc = parse_options_end(&ctx);
+
+	getline_fn = nul_term_line ? strbuf_getline_nul : strbuf_getline_lf;
 	if (preferred_index_format) {
 		if (preferred_index_format < INDEX_FORMAT_LB ||
 		    INDEX_FORMAT_UB < preferred_index_format)
@@ -861,40 +1071,81 @@ int cmd_update_index(int argc, const char **argv, const char *prefix)
 			    INDEX_FORMAT_LB, INDEX_FORMAT_UB);
 
 		if (the_index.version != preferred_index_format)
-			active_cache_changed = 1;
+			active_cache_changed |= SOMETHING_CHANGED;
 		the_index.version = preferred_index_format;
 	}
 
 	if (read_from_stdin) {
-		struct strbuf buf = STRBUF_INIT, nbuf = STRBUF_INIT;
+		struct strbuf buf = STRBUF_INIT;
+		struct strbuf unquoted = STRBUF_INIT;
 
 		setup_work_tree();
-		while (strbuf_getline(&buf, stdin, line_termination) != EOF) {
-			const char *p;
-			if (line_termination && buf.buf[0] == '"') {
-				strbuf_reset(&nbuf);
-				if (unquote_c_style(&nbuf, buf.buf, NULL))
+		while (getline_fn(&buf, stdin) != EOF) {
+			char *p;
+			if (!nul_term_line && buf.buf[0] == '"') {
+				strbuf_reset(&unquoted);
+				if (unquote_c_style(&unquoted, buf.buf, NULL))
 					die("line is badly quoted");
-				strbuf_swap(&buf, &nbuf);
+				strbuf_swap(&buf, &unquoted);
 			}
 			p = prefix_path(prefix, prefix_length, buf.buf);
 			update_one(p);
 			if (set_executable_bit)
 				chmod_path(set_executable_bit, p);
-			free((char *)p);
+			free(p);
 		}
-		strbuf_release(&nbuf);
+		strbuf_release(&unquoted);
 		strbuf_release(&buf);
+	}
+
+	if (split_index > 0) {
+		init_split_index(&the_index);
+		the_index.cache_changed |= SPLIT_INDEX_ORDERED;
+	} else if (!split_index && the_index.split_index) {
+		/*
+		 * can't discard_split_index(&the_index); because that
+		 * will destroy split_index->base->cache[], which may
+		 * be shared with the_index.cache[]. So yeah we're
+		 * leaking a bit here.
+		 */
+		the_index.split_index = NULL;
+		the_index.cache_changed |= SOMETHING_CHANGED;
+	}
+
+	switch (untracked_cache) {
+	case UC_UNSPECIFIED:
+		break;
+	case UC_DISABLE:
+		if (git_config_get_untracked_cache() == 1)
+			warning(_("core.untrackedCache is set to true; "
+				  "remove or change it, if you really want to "
+				  "disable the untracked cache"));
+		remove_untracked_cache(&the_index);
+		report(_("Untracked cache disabled"));
+		break;
+	case UC_TEST:
+		setup_work_tree();
+		return !test_if_untracked_cache_is_supported();
+	case UC_ENABLE:
+	case UC_FORCE:
+		if (git_config_get_untracked_cache() == 0)
+			warning(_("core.untrackedCache is set to false; "
+				  "remove or change it, if you really want to "
+				  "enable the untracked cache"));
+		add_untracked_cache(&the_index);
+		report(_("Untracked cache enabled for '%s'"), get_git_work_tree());
+		break;
+	default:
+		die("BUG: bad untracked_cache value: %d", untracked_cache);
 	}
 
 	if (active_cache_changed) {
 		if (newfd < 0) {
 			if (refresh_args.flags & REFRESH_QUIET)
 				exit(128);
-			unable_to_lock_index_die(get_index_file(), lock_error);
+			unable_to_lock_die(get_index_file(), lock_error);
 		}
-		if (write_cache(newfd, active_cache, active_nr) ||
-		    commit_locked_index(lock_file))
+		if (write_locked_index(&the_index, lock_file, COMMIT_LOCK))
 			die("Unable to write new index file");
 	}
 

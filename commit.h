@@ -20,19 +20,30 @@ struct commit {
 	unsigned long date;
 	struct commit_list *parents;
 	struct tree *tree;
-	char *buffer;
 };
 
 extern int save_commit_buffer;
 extern const char *commit_type;
 
 /* While we can decorate any object with a name, it's only used for commits.. */
-extern struct decoration name_decoration;
 struct name_decoration {
 	struct name_decoration *next;
 	int type;
-	char name[1];
+	char name[FLEX_ARRAY];
 };
+
+enum decoration_type {
+	DECORATION_NONE = 0,
+	DECORATION_REF_LOCAL,
+	DECORATION_REF_REMOTE,
+	DECORATION_REF_TAG,
+	DECORATION_REF_STASH,
+	DECORATION_REF_HEAD,
+	DECORATION_GRAFTED,
+};
+
+void add_name_decoration(enum decoration_type type, const char *name, struct object *obj);
+const struct name_decoration *get_name_decoration(const struct object *obj);
 
 struct commit *lookup_commit(const unsigned char *sha1);
 struct commit *lookup_commit_reference(const unsigned char *sha1);
@@ -48,8 +59,50 @@ struct commit *lookup_commit_reference_by_name(const char *name);
 struct commit *lookup_commit_or_die(const unsigned char *sha1, const char *ref_name);
 
 int parse_commit_buffer(struct commit *item, const void *buffer, unsigned long size);
-int parse_commit(struct commit *item);
+int parse_commit_gently(struct commit *item, int quiet_on_missing);
+static inline int parse_commit(struct commit *item)
+{
+	return parse_commit_gently(item, 0);
+}
 void parse_commit_or_die(struct commit *item);
+
+/*
+ * Associate an object buffer with the commit. The ownership of the
+ * memory is handed over to the commit, and must be free()-able.
+ */
+void set_commit_buffer(struct commit *, void *buffer, unsigned long size);
+
+/*
+ * Get any cached object buffer associated with the commit. Returns NULL
+ * if none. The resulting memory should not be freed.
+ */
+const void *get_cached_commit_buffer(const struct commit *, unsigned long *size);
+
+/*
+ * Get the commit's object contents, either from cache or by reading the object
+ * from disk. The resulting memory should not be modified, and must be given
+ * to unuse_commit_buffer when the caller is done.
+ */
+const void *get_commit_buffer(const struct commit *, unsigned long *size);
+
+/*
+ * Tell the commit subsytem that we are done with a particular commit buffer.
+ * The commit and buffer should be the input and return value, respectively,
+ * from an earlier call to get_commit_buffer.  The buffer may or may not be
+ * freed by this call; callers should not access the memory afterwards.
+ */
+void unuse_commit_buffer(const struct commit *, const void *buffer);
+
+/*
+ * Free any cached object buffer associated with the commit.
+ */
+void free_commit_buffer(struct commit *);
+
+/*
+ * Disassociate any cached object buffer from the commit, but do not free it.
+ * The buffer (or NULL, if none) is returned.
+ */
+const void *detach_commit_buffer(struct commit *, unsigned long *sizep);
 
 /* Find beginning and length of commit subject. */
 int find_commit_subject(const char *commit_buffer, const char **subject);
@@ -78,10 +131,18 @@ enum cmit_fmt {
 	CMIT_FMT_FULLER,
 	CMIT_FMT_ONELINE,
 	CMIT_FMT_EMAIL,
+	CMIT_FMT_MBOXRD,
 	CMIT_FMT_USERFORMAT,
 
 	CMIT_FMT_UNSPECIFIED
 };
+
+static inline int cmit_fmt_is_mail(enum cmit_fmt fmt)
+{
+	return (fmt == CMIT_FMT_EMAIL || fmt == CMIT_FMT_MBOXRD);
+}
+
+struct rev_info; /* in revision.h, it circularly uses enum cmit_fmt */
 
 struct pretty_print_context {
 	/*
@@ -89,14 +150,16 @@ struct pretty_print_context {
 	 */
 	enum cmit_fmt fmt;
 	int abbrev;
-	const char *subject;
 	const char *after_subject;
 	int preserve_subject;
-	enum date_mode date_mode;
+	struct date_mode date_mode;
 	unsigned date_mode_explicit:1;
+	int print_email_subject;
+	int expand_tabs_in_log;
 	int need_8bit_cte;
 	char *notes_message;
 	struct reflog_walk_info *reflog_info;
+	struct rev_info *rev;
 	const char *output_encoding;
 	struct string_list *mailmap;
 	int color;
@@ -107,6 +170,7 @@ struct pretty_print_context {
 	 * should not be counted on by callers.
 	 */
 	struct string_list in_body_headers;
+	int graph_width;
 };
 
 struct userformat_want {
@@ -114,15 +178,15 @@ struct userformat_want {
 };
 
 extern int has_non_ascii(const char *text);
-struct rev_info; /* in revision.h, it circularly uses enum cmit_fmt */
-extern char *logmsg_reencode(const struct commit *commit,
-			     char **commit_encoding,
-			     const char *output_encoding);
-extern void logmsg_free(char *msg, const struct commit *commit);
+extern const char *logmsg_reencode(const struct commit *commit,
+				   char **commit_encoding,
+				   const char *output_encoding);
 extern void get_commit_format(const char *arg, struct rev_info *);
 extern const char *format_subject(struct strbuf *sb, const char *msg,
 				  const char *line_separator);
 extern void userformat_find_requirements(const char *fmt, struct userformat_want *w);
+extern int commit_format_is_empty(enum cmit_fmt);
+extern const char *skip_blank_lines(const char *msg);
 extern void format_commit_message(const struct commit *commit,
 				  const char *format, struct strbuf *sb,
 				  const struct pretty_print_context *context);
@@ -177,9 +241,9 @@ enum rev_sort_order {
 void sort_in_topological_order(struct commit_list **, enum rev_sort_order);
 
 struct commit_graft {
-	unsigned char sha1[20];
+	struct object_id oid;
 	int nr_parent; /* < 0 if shallow commit */
-	unsigned char parent[FLEX_ARRAY][20]; /* more */
+	struct object_id parent[FLEX_ARRAY]; /* more */
 };
 typedef int (*each_commit_graft_fn)(const struct commit_graft *, void *);
 
@@ -187,9 +251,12 @@ struct commit_graft *read_graft_line(char *buf, int len);
 int register_commit_graft(struct commit_graft *, int);
 struct commit_graft *lookup_commit_graft(const unsigned char *sha1);
 
-extern struct commit_list *get_merge_bases(struct commit *rev1, struct commit *rev2, int cleanup);
-extern struct commit_list *get_merge_bases_many(struct commit *one, int n, struct commit **twos, int cleanup);
+extern struct commit_list *get_merge_bases(struct commit *rev1, struct commit *rev2);
+extern struct commit_list *get_merge_bases_many(struct commit *one, int n, struct commit **twos);
 extern struct commit_list *get_octopus_merge_bases(struct commit_list *in);
+
+/* To be used only when object flags after this call no longer matter */
+extern struct commit_list *get_merge_bases_many_dirty(struct commit *one, int n, struct commit **twos);
 
 /* largest positive number a signed 32-bit integer can contain */
 #define INFINITE_DEPTH 0x7fffffff
@@ -202,14 +269,15 @@ extern int for_each_commit_graft(each_commit_graft_fn, void *);
 extern int is_repository_shallow(void);
 extern struct commit_list *get_shallow_commits(struct object_array *heads,
 		int depth, int shallow_flag, int not_shallow_flag);
-extern void check_shallow_file_for_update(void);
+extern struct commit_list *get_shallow_commits_by_rev_list(
+		int ac, const char **av, int shallow_flag, int not_shallow_flag);
 extern void set_alternate_shallow_file(const char *path, int override);
 extern int write_shallow_commits(struct strbuf *out, int use_pack_protocol,
 				 const struct sha1_array *extra);
 extern void setup_alternate_shallow(struct lock_file *shallow_lock,
 				    const char **alternate_shallow_file,
 				    const struct sha1_array *extra);
-extern char *setup_temporary_shallow(const struct sha1_array *extra);
+extern const char *setup_temporary_shallow(const struct sha1_array *extra);
 extern void advertise_shallow_grafts(int);
 
 struct shallow_info {
@@ -235,6 +303,7 @@ extern void assign_shallow_commits_to_refs(struct shallow_info *info,
 					   int *ref_status);
 extern int delayed_reachability_test(struct shallow_info *si, int c);
 extern void prune_shallow(int show_only);
+extern struct trace_key trace_shallow;
 
 int is_descendant_of(struct commit *, struct commit_list *);
 int in_merge_bases(struct commit *, struct commit *);
@@ -261,11 +330,13 @@ struct commit_extra_header {
 extern void append_merge_tag_headers(struct commit_list *parents,
 				     struct commit_extra_header ***tail);
 
-extern int commit_tree(const struct strbuf *msg, const unsigned char *tree,
+extern int commit_tree(const char *msg, size_t msg_len,
+		       const unsigned char *tree,
 		       struct commit_list *parents, unsigned char *ret,
 		       const char *author, const char *sign_commit);
 
-extern int commit_tree_extended(const struct strbuf *msg, const unsigned char *tree,
+extern int commit_tree_extended(const char *msg, size_t msg_len,
+				const unsigned char *tree,
 				struct commit_list *parents, unsigned char *ret,
 				const char *author, const char *sign_commit,
 				struct commit_extra_header *);
@@ -274,11 +345,32 @@ extern struct commit_extra_header *read_commit_extra_headers(struct commit *, co
 
 extern void free_commit_extra_headers(struct commit_extra_header *extra);
 
+/*
+ * Search the commit object contents given by "msg" for the header "key".
+ * Returns a pointer to the start of the header contents, or NULL. The length
+ * of the header, up to the first newline, is returned via out_len.
+ *
+ * Note that some headers (like mergetag) may be multi-line. It is the caller's
+ * responsibility to parse further in this case!
+ */
+extern const char *find_commit_header(const char *msg, const char *key,
+				      size_t *out_len);
+
+/* Find the end of the log message, the right place for a new trailer. */
+extern int ignore_non_trailer(const char *buf, size_t len);
+
+typedef void (*each_mergetag_fn)(struct commit *commit, struct commit_extra_header *extra,
+				 void *cb_data);
+
+extern void for_each_mergetag(each_mergetag_fn fn, struct commit *commit, void *data);
+
 struct merge_remote_desc {
 	struct object *obj; /* the named object, could be a tag */
-	const char *name;
+	char name[FLEX_ARRAY];
 };
 #define merge_remote_util(commit) ((struct merge_remote_desc *)((commit)->util))
+extern void set_merge_remote_desc(struct commit *commit,
+				  const char *name, struct object *obj);
 
 /*
  * Given "name" from the command line to merge, find the commit object
@@ -287,11 +379,9 @@ struct merge_remote_desc {
  */
 struct commit *get_merge_parent(const char *name);
 
-extern int parse_signed_commit(const unsigned char *sha1,
+extern int parse_signed_commit(const struct commit *commit,
 			       struct strbuf *message, struct strbuf *signature);
-extern void print_commit_list(struct commit_list *list,
-			      const char *format_cur,
-			      const char *format_last);
+extern int remove_signature(struct strbuf *buf);
 
 /*
  * Check the signature of the given commit. The result of the check is stored
@@ -300,8 +390,11 @@ extern void print_commit_list(struct commit_list *list,
  * at all.  This may allocate memory for sig->gpg_output, sig->gpg_status,
  * sig->signer and sig->key.
  */
-extern void check_commit_signature(const struct commit* commit, struct signature_check *sigc);
+extern int check_commit_signature(const struct commit *commit, struct signature_check *sigc);
 
 int compare_commits_by_commit_date(const void *a_, const void *b_, void *unused);
+
+LAST_ARG_MUST_BE_NULL
+extern int run_commit_hook(int editor_is_used, const char *index_file, const char *name, ...);
 
 #endif /* COMMIT_H */

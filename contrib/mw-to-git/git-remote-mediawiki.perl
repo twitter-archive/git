@@ -461,7 +461,12 @@ sub download_mw_mediafile {
 
 	my $response = $mediawiki->{ua}->get($download_url);
 	if ($response->code == HTTP_CODE_OK) {
-		return $response->decoded_content;
+		# It is tempting to return
+		# $response->decoded_content({charset => "none"}), but
+		# when doing so, utf8::downgrade($content) fails with
+		# "Wide character in subroutine entry".
+		$response->decode();
+		return $response->content();
 	} else {
 		print {*STDERR} "Error downloading mediafile from :\n";
 		print {*STDERR} "URL: ${download_url}\n";
@@ -958,7 +963,7 @@ sub mw_upload_file {
 		print {*STDERR} "Check the configuration of file uploads in your mediawiki.\n";
 		return $newrevid;
 	}
-	# Deleting and uploading a file requires a priviledged user
+	# Deleting and uploading a file requires a privileged user
 	if ($file_deleted) {
 		$mediawiki = connect_maybe($mediawiki, $remotename, $url);
 		my $query = {

@@ -1,6 +1,12 @@
 #include "cache.h"
 #include "string-list.h"
 
+void string_list_init(struct string_list *list, int strdup_strings)
+{
+	memset(list, 0, sizeof(*list));
+	list->strdup_strings = strdup_strings;
+}
+
 /* if there is no exact match, point to the index where the entry could be
  * inserted */
 static int get_entry_index(const struct string_list *list, const char *string,
@@ -37,8 +43,7 @@ static int add_entry(int insert_at, struct string_list *list, const char *string
 
 	if (list->nr + 1 >= list->alloc) {
 		list->alloc += 32;
-		list->items = xrealloc(list->items, list->alloc
-				* sizeof(struct string_list_item));
+		REALLOC_ARRAY(list->items, list->alloc);
 	}
 	if (index < list->nr)
 		memmove(list->items + index + 1, list->items + index,
@@ -54,13 +59,7 @@ static int add_entry(int insert_at, struct string_list *list, const char *string
 
 struct string_list_item *string_list_insert(struct string_list *list, const char *string)
 {
-	return string_list_insert_at_index(list, -1, string);
-}
-
-struct string_list_item *string_list_insert_at_index(struct string_list *list,
-						     int insert_at, const char *string)
-{
-	int index = add_entry(insert_at, list, string);
+	int index = add_entry(-1, list, string);
 
 	if (index < 0)
 		index = -1 - index;
@@ -212,32 +211,29 @@ struct string_list_item *string_list_append(struct string_list *list,
 			list->strdup_strings ? xstrdup(string) : (char *)string);
 }
 
-/* Yuck */
-static compare_strings_fn compare_for_qsort;
-
-/* Only call this from inside sort_string_list! */
-static int cmp_items(const void *a, const void *b)
+static int cmp_items(const void *a, const void *b, void *ctx)
 {
+	compare_strings_fn cmp = ctx;
 	const struct string_list_item *one = a;
 	const struct string_list_item *two = b;
-	return compare_for_qsort(one->string, two->string);
+	return cmp(one->string, two->string);
 }
 
-void sort_string_list(struct string_list *list)
+void string_list_sort(struct string_list *list)
 {
-	compare_for_qsort = list->cmp ? list->cmp : strcmp;
-	qsort(list->items, list->nr, sizeof(*list->items), cmp_items);
+	QSORT_S(list->items, list->nr, cmp_items,
+		list->cmp ? list->cmp : strcmp);
 }
 
 struct string_list_item *unsorted_string_list_lookup(struct string_list *list,
 						     const char *string)
 {
-	int i;
+	struct string_list_item *item;
 	compare_strings_fn cmp = list->cmp ? list->cmp : strcmp;
 
-	for (i = 0; i < list->nr; i++)
-		if (!cmp(string, list->items[i].string))
-			return list->items + i;
+	for_each_string_list_item(item, list)
+		if (!cmp(string, item->string))
+			return item;
 	return NULL;
 }
 

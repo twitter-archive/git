@@ -48,7 +48,7 @@ test_expect_success 'setup svn repository' '
 test_expect_success 'setup git mirror and merge' '
 	git svn init "$svnrepo" -t tags -T trunk -b branches &&
 	git svn fetch &&
-	git checkout -b svn remotes/trunk &&
+	git checkout -b svn remotes/origin/trunk &&
 	git checkout -b merge &&
 	echo new file > new_file &&
 	git add new_file &&
@@ -68,8 +68,8 @@ test_expect_success 'setup git mirror and merge' '
 test_debug 'gitk --all & sleep 1'
 
 test_expect_success 'verify pre-merge ancestry' "
-	test x\`git rev-parse --verify refs/heads/svn^2\` = \
-	     x\`git rev-parse --verify refs/heads/merge\` &&
+	test x\$(git rev-parse --verify refs/heads/svn^2) = \
+	     x\$(git rev-parse --verify refs/heads/merge) &&
 	git cat-file commit refs/heads/svn^ | grep '^friend$'
 	"
 
@@ -80,10 +80,10 @@ test_expect_success 'git svn dcommit merges' "
 test_debug 'gitk --all & sleep 1'
 
 test_expect_success 'verify post-merge ancestry' "
-	test x\`git rev-parse --verify refs/heads/svn\` = \
-	     x\`git rev-parse --verify refs/remotes/trunk \` &&
-	test x\`git rev-parse --verify refs/heads/svn^2\` = \
-	     x\`git rev-parse --verify refs/heads/merge\` &&
+	test x\$(git rev-parse --verify refs/heads/svn) = \
+	     x\$(git rev-parse --verify refs/remotes/origin/trunk) &&
+	test x\$(git rev-parse --verify refs/heads/svn^2) = \
+	     x\$(git rev-parse --verify refs/heads/merge) &&
 	git cat-file commit refs/heads/svn^ | grep '^friend$'
 	"
 

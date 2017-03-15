@@ -368,17 +368,18 @@ situation:
 
 ------------------------------------------------
 $ git status
-# On branch master
-# Changes to be committed:
-#   (use "git reset HEAD <file>..." to unstage)
-#
-#       new file: closing.txt
-#
-# Changes not staged for commit:
-#   (use "git add <file>..." to update what will be committed)
-#
-#       modified: file.txt
-#
+On branch master
+Changes to be committed:
+  (use "git reset HEAD <file>..." to unstage)
+
+	new file:   closing.txt
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git checkout -- <file>..." to discard changes in working directory)
+
+	modified:   file.txt
+
 ------------------------------------------------
 
 Since the current state of closing.txt is cached in the index file,
@@ -403,7 +404,7 @@ What next?
 
 At this point you should know everything necessary to read the man
 pages for any of the git commands; one good place to start would be
-with the commands mentioned in link:everyday.html[Everyday Git].  You
+with the commands mentioned in linkgit:giteveryday[7].  You
 should be able to find any unknown jargon in linkgit:gitglossary[7].
 
 The link:user-manual.html[Git User's Manual] provides a more
@@ -427,9 +428,9 @@ linkgit:gitcvs-migration[7],
 linkgit:gitcore-tutorial[7],
 linkgit:gitglossary[7],
 linkgit:git-help[1],
-link:everyday.html[Everyday Git],
+linkgit:giteveryday[7],
 link:user-manual.html[The Git User's Manual]
 
 GIT
 ---
-Part of the linkgit:git[1] suite.
+Part of the linkgit:git[1] suite

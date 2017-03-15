@@ -3,8 +3,9 @@
  *
  * Copyright (C) 2006 Johannes Schindelin
  */
-#include "cache.h"
 #include "builtin.h"
+#include "pathspec.h"
+#include "lockfile.h"
 #include "dir.h"
 #include "cache-tree.h"
 #include "string-list.h"
@@ -12,44 +13,56 @@
 #include "submodule.h"
 
 static const char * const builtin_mv_usage[] = {
-	N_("git mv [options] <source>... <destination>"),
+	N_("git mv [<options>] <source>... <destination>"),
 	NULL
 };
 
 #define DUP_BASENAME 1
 #define KEEP_TRAILING_SLASH 2
 
-static const char **internal_copy_pathspec(const char *prefix,
-					   const char **pathspec,
-					   int count, unsigned flags)
+static const char **internal_prefix_pathspec(const char *prefix,
+					     const char **pathspec,
+					     int count, unsigned flags)
 {
 	int i;
-	const char **result = xmalloc((count + 1) * sizeof(const char *));
-	memcpy(result, pathspec, count * sizeof(const char *));
-	result[count] = NULL;
+	const char **result;
+	int prefixlen = prefix ? strlen(prefix) : 0;
+	ALLOC_ARRAY(result, count + 1);
+
+	/* Create an intermediate copy of the pathspec based on the flags */
 	for (i = 0; i < count; i++) {
-		int length = strlen(result[i]);
+		int length = strlen(pathspec[i]);
 		int to_copy = length;
+		char *it;
 		while (!(flags & KEEP_TRAILING_SLASH) &&
-		       to_copy > 0 && is_dir_sep(result[i][to_copy - 1]))
+		       to_copy > 0 && is_dir_sep(pathspec[i][to_copy - 1]))
 			to_copy--;
-		if (to_copy != length || flags & DUP_BASENAME) {
-			char *it = xmemdupz(result[i], to_copy);
-			if (flags & DUP_BASENAME) {
-				result[i] = xstrdup(basename(it));
-				free(it);
-			} else
-				result[i] = it;
+
+		it = xmemdupz(pathspec[i], to_copy);
+		if (flags & DUP_BASENAME) {
+			result[i] = xstrdup(basename(it));
+			free(it);
+		} else {
+			result[i] = it;
 		}
 	}
-	return get_pathspec(prefix, result);
+	result[count] = NULL;
+
+	/* Prefix the pathspec and free the old intermediate strings */
+	for (i = 0; i < count; i++) {
+		const char *match = prefix_path(prefix, prefixlen, result[i]);
+		free((char *) result[i]);
+		result[i] = match;
+	}
+
+	return result;
 }
 
 static const char *add_slash(const char *path)
 {
-	int len = strlen(path);
+	size_t len = strlen(path);
 	if (path[len - 1] != '/') {
-		char *with_slash = xmalloc(len + 2);
+		char *with_slash = xmalloc(st_add(len, 2));
 		memcpy(with_slash, path, len);
 		with_slash[len++] = '/';
 		with_slash[len] = 0;
@@ -61,9 +74,49 @@ static const char *add_slash(const char *path)
 static struct lock_file lock_file;
 #define SUBMODULE_WITH_GITDIR ((const char *)1)
 
+static void prepare_move_submodule(const char *src, int first,
+				   const char **submodule_gitfile)
+{
+	struct strbuf submodule_dotgit = STRBUF_INIT;
+	if (!S_ISGITLINK(active_cache[first]->ce_mode))
+		die(_("Directory %s is in index and no submodule?"), src);
+	if (!is_staging_gitmodules_ok())
+		die(_("Please stage your changes to .gitmodules or stash them to proceed"));
+	strbuf_addf(&submodule_dotgit, "%s/.git", src);
+	*submodule_gitfile = read_gitfile(submodule_dotgit.buf);
+	if (*submodule_gitfile)
+		*submodule_gitfile = xstrdup(*submodule_gitfile);
+	else
+		*submodule_gitfile = SUBMODULE_WITH_GITDIR;
+	strbuf_release(&submodule_dotgit);
+}
+
+static int index_range_of_same_dir(const char *src, int length,
+				   int *first_p, int *last_p)
+{
+	const char *src_w_slash = add_slash(src);
+	int first, last, len_w_slash = length + 1;
+
+	first = cache_name_pos(src_w_slash, len_w_slash);
+	if (first >= 0)
+		die(_("%.*s is in index"), len_w_slash, src_w_slash);
+
+	first = -1 - first;
+	for (last = first; last < active_nr; last++) {
+		const char *path = active_cache[last]->name;
+		if (strncmp(path, src_w_slash, len_w_slash))
+			break;
+	}
+	if (src_w_slash != src)
+		free((char *)src_w_slash);
+	*first_p = first;
+	*last_p = last;
+	return last - first;
+}
+
 int cmd_mv(int argc, const char **argv, const char *prefix)
 {
-	int i, newfd, gitmodules_modified = 0;
+	int i, flags, gitmodules_modified = 0;
 	int verbose = 0, show_only = 0, force = 0, ignore_errors = 0;
 	struct option builtin_mv_options[] = {
 		OPT__VERBOSE(&verbose, N_("be verbose")),
@@ -85,30 +138,33 @@ int cmd_mv(int argc, const char **argv, const char *prefix)
 	if (--argc < 1)
 		usage_with_options(builtin_mv_usage, builtin_mv_options);
 
-	newfd = hold_locked_index(&lock_file, 1);
+	hold_locked_index(&lock_file, LOCK_DIE_ON_ERROR);
 	if (read_cache() < 0)
 		die(_("index file corrupt"));
 
-	source = internal_copy_pathspec(prefix, argv, argc, 0);
+	source = internal_prefix_pathspec(prefix, argv, argc, 0);
 	modes = xcalloc(argc, sizeof(enum update_mode));
 	/*
 	 * Keep trailing slash, needed to let
-	 * "git mv file no-such-dir/" error out.
+	 * "git mv file no-such-dir/" error out, except in the case
+	 * "git mv directory no-such-dir/".
 	 */
-	dest_path = internal_copy_pathspec(prefix, argv + argc, 1,
-					   KEEP_TRAILING_SLASH);
+	flags = KEEP_TRAILING_SLASH;
+	if (argc == 1 && is_directory(argv[0]) && !is_directory(argv[1]))
+		flags = 0;
+	dest_path = internal_prefix_pathspec(prefix, argv + argc, 1, flags);
 	submodule_gitfile = xcalloc(argc, sizeof(char *));
 
 	if (dest_path[0][0] == '\0')
 		/* special case: "." was normalized to "" */
-		destination = internal_copy_pathspec(dest_path[0], argv, argc, DUP_BASENAME);
+		destination = internal_prefix_pathspec(dest_path[0], argv, argc, DUP_BASENAME);
 	else if (!lstat(dest_path[0], &st) &&
 			S_ISDIR(st.st_mode)) {
 		dest_path[0] = add_slash(dest_path[0]);
-		destination = internal_copy_pathspec(dest_path[0], argv, argc, DUP_BASENAME);
+		destination = internal_prefix_pathspec(dest_path[0], argv, argc, DUP_BASENAME);
 	} else {
 		if (argc != 1)
-			die("destination '%s' is not a directory", dest_path[0]);
+			die(_("destination '%s' is not a directory"), dest_path[0]);
 		destination = dest_path;
 	}
 
@@ -131,75 +187,41 @@ int cmd_mv(int argc, const char **argv, const char *prefix)
 				&& lstat(dst, &st) == 0)
 			bad = _("cannot move directory over file");
 		else if (src_is_dir) {
-			int first = cache_name_pos(src, length);
-			if (first >= 0) {
-				struct strbuf submodule_dotgit = STRBUF_INIT;
-				if (!S_ISGITLINK(active_cache[first]->ce_mode))
-					die (_("Huh? Directory %s is in index and no submodule?"), src);
-				if (!is_staging_gitmodules_ok())
-					die (_("Please, stage your changes to .gitmodules or stash them to proceed"));
-				strbuf_addf(&submodule_dotgit, "%s/.git", src);
-				submodule_gitfile[i] = read_gitfile(submodule_dotgit.buf);
-				if (submodule_gitfile[i])
-					submodule_gitfile[i] = xstrdup(submodule_gitfile[i]);
-				else
-					submodule_gitfile[i] = SUBMODULE_WITH_GITDIR;
-				strbuf_release(&submodule_dotgit);
-			} else {
-				const char *src_w_slash = add_slash(src);
-				int last, len_w_slash = length + 1;
+			int first = cache_name_pos(src, length), last;
+
+			if (first >= 0)
+				prepare_move_submodule(src, first,
+						       submodule_gitfile + i);
+			else if (index_range_of_same_dir(src, length,
+							 &first, &last) < 1)
+				bad = _("source directory is empty");
+			else { /* last - first >= 1 */
+				int j, dst_len, n;
 
 				modes[i] = WORKING_DIRECTORY;
+				n = argc + last - first;
+				REALLOC_ARRAY(source, n);
+				REALLOC_ARRAY(destination, n);
+				REALLOC_ARRAY(modes, n);
+				REALLOC_ARRAY(submodule_gitfile, n);
 
-				first = cache_name_pos(src_w_slash, len_w_slash);
-				if (first >= 0)
-					die (_("Huh? %.*s is in index?"),
-							len_w_slash, src_w_slash);
+				dst = add_slash(dst);
+				dst_len = strlen(dst);
 
-				first = -1 - first;
-				for (last = first; last < active_nr; last++) {
-					const char *path = active_cache[last]->name;
-					if (strncmp(path, src_w_slash, len_w_slash))
-						break;
+				for (j = 0; j < last - first; j++) {
+					const char *path = active_cache[first + j]->name;
+					source[argc + j] = path;
+					destination[argc + j] =
+						prefix_path(dst, dst_len, path + length + 1);
+					modes[argc + j] = INDEX;
+					submodule_gitfile[argc + j] = NULL;
 				}
-				if (src_w_slash != src)
-					free((char *)src_w_slash);
-
-				if (last - first < 1)
-					bad = _("source directory is empty");
-				else {
-					int j, dst_len;
-
-					if (last - first > 0) {
-						source = xrealloc(source,
-								(argc + last - first)
-								* sizeof(char *));
-						destination = xrealloc(destination,
-								(argc + last - first)
-								* sizeof(char *));
-						modes = xrealloc(modes,
-								(argc + last - first)
-								* sizeof(enum update_mode));
-					}
-
-					dst = add_slash(dst);
-					dst_len = strlen(dst);
-
-					for (j = 0; j < last - first; j++) {
-						const char *path =
-							active_cache[first + j]->name;
-						source[argc + j] = path;
-						destination[argc + j] =
-							prefix_path(dst, dst_len,
-								path + length + 1);
-						modes[argc + j] = INDEX;
-					}
-					argc += last - first;
-				}
+				argc += last - first;
 			}
 		} else if (cache_name_pos(src, length) < 0)
 			bad = _("not under version control");
-		else if (lstat(dst, &st) == 0) {
+		else if (lstat(dst, &st) == 0 &&
+			 (!ignore_case || strcasecmp(src, dst))) {
 			bad = _("destination exists");
 			if (force) {
 				/*
@@ -220,19 +242,22 @@ int cmd_mv(int argc, const char **argv, const char *prefix)
 		else
 			string_list_insert(&src_for_dst, dst);
 
-		if (bad) {
-			if (ignore_errors) {
-				if (--argc > 0) {
-					memmove(source + i, source + i + 1,
-						(argc - i) * sizeof(char *));
-					memmove(destination + i,
-						destination + i + 1,
-						(argc - i) * sizeof(char *));
-					i--;
-				}
-			} else
-				die (_("%s, source=%s, destination=%s"),
-				     bad, src, dst);
+		if (!bad)
+			continue;
+		if (!ignore_errors)
+			die(_("%s, source=%s, destination=%s"),
+			     bad, src, dst);
+		if (--argc > 0) {
+			int n = argc - i;
+			memmove(source + i, source + i + 1,
+				n * sizeof(char *));
+			memmove(destination + i, destination + i + 1,
+				n * sizeof(char *));
+			memmove(modes + i, modes + i + 1,
+				n * sizeof(enum update_mode));
+			memmove(submodule_gitfile + i, submodule_gitfile + i + 1,
+				n * sizeof(char *));
+			i--;
 		}
 	}
 
@@ -242,15 +267,18 @@ int cmd_mv(int argc, const char **argv, const char *prefix)
 		int pos;
 		if (show_only || verbose)
 			printf(_("Renaming %s to %s\n"), src, dst);
-		if (!show_only && mode != INDEX) {
-			if (rename(src, dst) < 0 && !ignore_errors)
-				die_errno (_("renaming '%s' failed"), src);
-			if (submodule_gitfile[i]) {
-				if (submodule_gitfile[i] != SUBMODULE_WITH_GITDIR)
-					connect_work_tree_and_git_dir(dst, submodule_gitfile[i]);
-				if (!update_path_in_gitmodules(src, dst))
-					gitmodules_modified = 1;
-			}
+		if (show_only)
+			continue;
+		if (mode != INDEX && rename(src, dst) < 0) {
+			if (ignore_errors)
+				continue;
+			die_errno(_("renaming '%s' failed"), src);
+		}
+		if (submodule_gitfile[i]) {
+			if (submodule_gitfile[i] != SUBMODULE_WITH_GITDIR)
+				connect_work_tree_and_git_dir(dst, submodule_gitfile[i]);
+			if (!update_path_in_gitmodules(src, dst))
+				gitmodules_modified = 1;
 		}
 
 		if (mode == WORKING_DIRECTORY)
@@ -265,11 +293,9 @@ int cmd_mv(int argc, const char **argv, const char *prefix)
 	if (gitmodules_modified)
 		stage_updated_gitmodules();
 
-	if (active_cache_changed) {
-		if (write_cache(newfd, active_cache, active_nr) ||
-		    commit_locked_index(&lock_file))
-			die(_("Unable to write new index file"));
-	}
+	if (active_cache_changed &&
+	    write_locked_index(&the_index, &lock_file, COMMIT_LOCK))
+		die(_("Unable to write new index file"));
 
 	return 0;
 }

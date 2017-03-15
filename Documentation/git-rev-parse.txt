@@ -91,7 +91,8 @@ repository.  For example:
 ----
 prefix=$(git rev-parse --show-prefix)
 cd "$(git rev-parse --show-toplevel)"
-eval "set -- $(git rev-parse --sq --prefix "$prefix" "$@")"
+# rev-parse provides the -- needed for 'set'
+eval "set $(git rev-parse --sq --prefix "$prefix" -- "$@")"
 ----
 
 --verify::
@@ -102,7 +103,7 @@ eval "set -- $(git rev-parse --sq --prefix "$prefix" "$@")"
 +
 If you want to make sure that the output actually names an object in
 your object database and/or can be used as a specific type of object
-you require, you can add "^{type}" peeling operator to the parameter.
+you require, you can add the `^{type}` peeling operator to the parameter.
 For example, `git rev-parse "$VAR^{commit}"` will make sure `$VAR`
 names an existing object that is a commit-ish (i.e. a commit, or an
 annotated tag that points at a commit).  To make sure that `$VAR`
@@ -114,6 +115,7 @@ can be used.
 	Only meaningful in `--verify` mode. Do not output an error
 	message if the first argument is not a valid object name;
 	instead exit with non-zero status silently.
+	SHA-1s for valid object names are printed to stdout on success.
 
 --sq::
 	Usually the output is made one line per flag and
@@ -146,7 +148,7 @@ can be used.
 	form as close to the original input as possible.
 
 --symbolic-full-name::
-	This is similar to \--symbolic, but it omits input that
+	This is similar to --symbolic, but it omits input that
 	are not refs (i.e. branch or tag names; or more
 	explicitly disambiguating "heads/master" form, when you
 	want to name the "master" branch when there is an
@@ -183,7 +185,7 @@ shown.  If the pattern does not contain a globbing character (`?`,
 	consider. Repetitions of this option accumulate exclusion patterns
 	up to the next `--all`, `--branches`, `--tags`, `--remotes`, or
 	`--glob` option (other options or arguments do not clear
-	accumlated patterns).
+	accumulated patterns).
 +
 The patterns given should not begin with `refs/heads`, `refs/tags`, or
 `refs/remotes` when applied to `--branches`, `--tags`, or `--remotes`,
@@ -215,6 +217,13 @@ If `$GIT_DIR` is not defined and the current directory
 is not detected to lie in a Git repository or work tree
 print a message to stderr and exit with nonzero status.
 
+--absolute-git-dir::
+	Like `--git-dir`, but its output is always the canonicalized
+	absolute path.
+
+--git-common-dir::
+	Show `$GIT_COMMON_DIR` if defined, else `$GIT_DIR`.
+
 --is-inside-git-dir::
 	When the current working directory is below the repository
 	directory print "true", otherwise "false".
@@ -232,6 +241,13 @@ print a message to stderr and exit with nonzero status.
 	repository.  If <path> is a gitfile then the resolved path
 	to the real repository is printed.
 
+--git-path <path>::
+	Resolve "$GIT_DIR/<path>" and takes other path relocation
+	variables such as $GIT_OBJECT_DIRECTORY,
+	$GIT_INDEX_FILE... into account. For example, if
+	$GIT_OBJECT_DIRECTORY is set to /foo/bar then "git rev-parse
+	--git-path objects/abc" returns /foo/bar/abc.
+
 --show-cdup::
 	When the command is invoked from a subdirectory, show the
 	path of the top-level directory relative to the current
@@ -244,6 +260,10 @@ print a message to stderr and exit with nonzero status.
 
 --show-toplevel::
 	Show the absolute path of the top-level directory.
+
+--shared-index-path::
+	Show the path to the shared index file in split index mode, or
+	empty if not in split-index mode.
 
 Other Options
 ~~~~~~~~~~~~~
@@ -284,20 +304,20 @@ Input Format
 
 'git rev-parse --parseopt' input format is fully text based. It has two parts,
 separated by a line that contains only `--`. The lines before the separator
-(should be more than one) are used for the usage.
+(should be one or more) are used for the usage.
 The lines after the separator describe the options.
 
 Each line of options has this format:
 
 ------------
-<opt_spec><flags>* SP+ help LF
+<opt-spec><flags>*<arg-hint>? SP+ help LF
 ------------
 
-`<opt_spec>`::
+`<opt-spec>`::
 	its format is the short option character, then the long option name
 	separated by a comma. Both parts are not required, though at least one
-	is necessary. `h,help`, `dry-run` and `f` are all three correct
-	`<opt_spec>`.
+	is necessary. May not contain any of the `<flags>` characters.
+	`h,help`, `dry-run` and `f` are examples of correct `<opt-spec>`.
 
 `<flags>`::
 	`<flags>` are of `*`, `=`, `?` or `!`.
@@ -312,6 +332,12 @@ Each line of options has this format:
 	  documented in linkgit:gitcli[7].
 
 	* Use `!` to not make the corresponding negated long option available.
+
+`<arg-hint>`::
+	`<arg-hint>`, if specified, is used as a name of the argument in the
+	help output, for options that take arguments. `<arg-hint>` is
+	terminated by the first whitespace.  It is customary to use a
+	dash to separate words in a multi-word argument hint.
 
 The remainder of the line, after stripping the spaces, is used
 as the help associated to the option.
@@ -333,11 +359,35 @@ h,help    show the help
 
 foo       some nifty option --foo
 bar=      some cool option --bar with an argument
+baz=arg   another cool option --baz with a named argument
+qux?path  qux may take a path argument but has meaning by itself
 
   An option group Header
 C?        option C with an optional argument"
 
 eval "$(echo "$OPTS_SPEC" | git rev-parse --parseopt -- "$@" || echo exit $?)"
+------------
+
+
+Usage text
+~~~~~~~~~~
+
+When `"$@"` is `-h` or `--help` in the above example, the following
+usage text would be shown:
+
+------------
+usage: some-command [options] <args>...
+
+    some-command does foo and bar!
+
+    -h, --help            show the help
+    --foo                 some nifty option --foo
+    --bar ...             some cool option --bar with an argument
+    --baz <arg>           another cool option --baz with a named argument
+    --qux[=<path>]        qux may take a path argument but has meaning by itself
+
+An option group Header
+    -C[...]               option C with an optional argument
 ------------
 
 SQ-QUOTE

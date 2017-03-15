@@ -111,8 +111,7 @@ static inline void push_bitmapped_commit(struct commit *commit, struct ewah_bitm
 {
 	if (writer.selected_nr >= writer.selected_alloc) {
 		writer.selected_alloc = (writer.selected_alloc + 32) * 2;
-		writer.selected = xrealloc(writer.selected,
-					   writer.selected_alloc * sizeof(struct bitmapped_commit));
+		REALLOC_ARRAY(writer.selected, writer.selected_alloc);
 	}
 
 	writer.selected[writer.selected_nr].commit = commit;
@@ -149,11 +148,10 @@ static uint32_t find_object_pos(const unsigned char *sha1)
 	return entry->in_pack_pos;
 }
 
-static void show_object(struct object *object, const struct name_path *path,
-			const char *last, void *data)
+static void show_object(struct object *object, const char *name, void *data)
 {
 	struct bitmap *base = data;
-	bitmap_set(base, find_object_pos(object->sha1));
+	bitmap_set(base, find_object_pos(object->oid.hash));
 	mark_as_seen(object);
 }
 
@@ -166,12 +164,12 @@ static int
 add_to_include_set(struct bitmap *base, struct commit *commit)
 {
 	khiter_t hash_pos;
-	uint32_t bitmap_pos = find_object_pos(commit->object.sha1);
+	uint32_t bitmap_pos = find_object_pos(commit->object.oid.hash);
 
 	if (bitmap_get(base, bitmap_pos))
 		return 0;
 
-	hash_pos = kh_get_sha1(writer.bitmaps, commit->object.sha1);
+	hash_pos = kh_get_sha1(writer.bitmaps, commit->object.oid.hash);
 	if (hash_pos < kh_end(writer.bitmaps)) {
 		struct bitmapped_commit *bc = kh_value(writer.bitmaps, hash_pos);
 		bitmap_or_ewah(base, bc->bitmap);
@@ -309,10 +307,10 @@ void bitmap_writer_build(struct packing_data *to_pack)
 		if (i >= reuse_after)
 			stored->flags |= BITMAP_FLAG_REUSE;
 
-		hash_pos = kh_put_sha1(writer.bitmaps, object->sha1, &hash_ret);
+		hash_pos = kh_put_sha1(writer.bitmaps, object->oid.hash, &hash_ret);
 		if (hash_ret == 0)
 			die("Duplicate entry when writing index: %s",
-			    sha1_to_hex(object->sha1));
+			    oid_to_hex(&object->oid));
 
 		kh_value(writer.bitmaps, hash_pos) = stored;
 		display_progress(writer.progress, writer.selected_nr - i);
@@ -387,8 +385,7 @@ void bitmap_writer_select_commits(struct commit **indexed_commits,
 {
 	unsigned int i = 0, j, next;
 
-	qsort(indexed_commits, indexed_commits_nr, sizeof(indexed_commits[0]),
-	      date_compare);
+	QSORT(indexed_commits, indexed_commits_nr, date_compare);
 
 	if (writer.show_progress)
 		writer.progress = start_progress("Selecting bitmap commits", 0);
@@ -415,14 +412,14 @@ void bitmap_writer_select_commits(struct commit **indexed_commits,
 
 		if (next == 0) {
 			chosen = indexed_commits[i];
-			reused_bitmap = find_reused_bitmap(chosen->object.sha1);
+			reused_bitmap = find_reused_bitmap(chosen->object.oid.hash);
 		} else {
 			chosen = indexed_commits[i + next];
 
 			for (j = 0; j <= next; ++j) {
 				struct commit *cm = indexed_commits[i + j];
 
-				reused_bitmap = find_reused_bitmap(cm->object.sha1);
+				reused_bitmap = find_reused_bitmap(cm->object.oid.hash);
 				if (reused_bitmap || (cm->object.flags & NEEDS_BITMAP) != 0) {
 					chosen = cm;
 					break;
@@ -473,19 +470,17 @@ static void write_selected_commits_v1(struct sha1file *f,
 
 	for (i = 0; i < writer.selected_nr; ++i) {
 		struct bitmapped_commit *stored = &writer.selected[i];
-		struct bitmap_disk_entry on_disk;
 
 		int commit_pos =
-			sha1_pos(stored->commit->object.sha1, index, index_nr, sha1_access);
+			sha1_pos(stored->commit->object.oid.hash, index, index_nr, sha1_access);
 
 		if (commit_pos < 0)
 			die("BUG: trying to write commit not in index");
 
-		on_disk.object_pos = htonl(commit_pos);
-		on_disk.xor_offset = stored->xor_offset;
-		on_disk.flags = stored->flags;
+		sha1write_be32(f, commit_pos);
+		sha1write_u8(f, stored->xor_offset);
+		sha1write_u8(f, stored->flags);
 
-		sha1write(f, &on_disk, sizeof(on_disk));
 		dump_bitmap(f, stored->write_as);
 	}
 }

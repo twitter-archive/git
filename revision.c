@@ -17,83 +17,22 @@
 #include "mailmap.h"
 #include "commit-slab.h"
 #include "dir.h"
+#include "cache-tree.h"
+#include "bisect.h"
 
 volatile show_early_output_fn_t show_early_output;
 
-char *path_name(const struct name_path *path, const char *name)
+static const char *term_bad;
+static const char *term_good;
+
+void show_object_with_name(FILE *out, struct object *obj, const char *name)
 {
-	const struct name_path *p;
-	char *n, *m;
-	int nlen = strlen(name);
-	int len = nlen + 1;
+	const char *p;
 
-	for (p = path; p; p = p->up) {
-		if (p->elem_len)
-			len += p->elem_len + 1;
-	}
-	n = xmalloc(len);
-	m = n + len - (nlen + 1);
-	strcpy(m, name);
-	for (p = path; p; p = p->up) {
-		if (p->elem_len) {
-			m -= p->elem_len + 1;
-			memcpy(m, p->elem, p->elem_len);
-			m[p->elem_len] = '/';
-		}
-	}
-	return n;
-}
-
-static int show_path_component_truncated(FILE *out, const char *name, int len)
-{
-	int cnt;
-	for (cnt = 0; cnt < len; cnt++) {
-		int ch = name[cnt];
-		if (!ch || ch == '\n')
-			return -1;
-		fputc(ch, out);
-	}
-	return len;
-}
-
-static int show_path_truncated(FILE *out, const struct name_path *path)
-{
-	int emitted, ours;
-
-	if (!path)
-		return 0;
-	emitted = show_path_truncated(out, path->up);
-	if (emitted < 0)
-		return emitted;
-	if (emitted)
-		fputc('/', out);
-	ours = show_path_component_truncated(out, path->elem, path->elem_len);
-	if (ours < 0)
-		return ours;
-	return ours || emitted;
-}
-
-void show_object_with_name(FILE *out, struct object *obj,
-			   const struct name_path *path, const char *component)
-{
-	struct name_path leaf;
-	leaf.up = (struct name_path *)path;
-	leaf.elem = component;
-	leaf.elem_len = strlen(component);
-
-	fprintf(out, "%s ", sha1_to_hex(obj->sha1));
-	show_path_truncated(out, &leaf);
+	fprintf(out, "%s ", oid_to_hex(&obj->oid));
+	for (p = name; *p && *p != '\n'; p++)
+		fputc(*p, out);
 	fputc('\n', out);
-}
-
-void add_object(struct object *obj,
-		struct object_array *p,
-		struct name_path *path,
-		const char *name)
-{
-	char *pn = path_name(path, name);
-	add_object_array(obj, pn, p);
-	free(pn);
 }
 
 static void mark_blob_uninteresting(struct blob *blob)
@@ -111,19 +50,19 @@ static void mark_tree_contents_uninteresting(struct tree *tree)
 	struct name_entry entry;
 	struct object *obj = &tree->object;
 
-	if (!has_sha1_file(obj->sha1))
+	if (!has_object_file(&obj->oid))
 		return;
 	if (parse_tree(tree) < 0)
-		die("bad tree %s", sha1_to_hex(obj->sha1));
+		die("bad tree %s", oid_to_hex(&obj->oid));
 
 	init_tree_desc(&desc, tree->buffer, tree->size);
 	while (tree_entry(&desc, &entry)) {
 		switch (object_type(entry.mode)) {
 		case OBJ_TREE:
-			mark_tree_uninteresting(lookup_tree(entry.sha1));
+			mark_tree_uninteresting(lookup_tree(entry.oid->hash));
 			break;
 		case OBJ_BLOB:
-			mark_blob_uninteresting(lookup_blob(entry.sha1));
+			mark_blob_uninteresting(lookup_blob(entry.oid->hash));
 			break;
 		default:
 			/* Subproject commit - not in this repository */
@@ -140,10 +79,12 @@ static void mark_tree_contents_uninteresting(struct tree *tree)
 
 void mark_tree_uninteresting(struct tree *tree)
 {
-	struct object *obj = &tree->object;
+	struct object *obj;
 
 	if (!tree)
 		return;
+
+	obj = &tree->object;
 	if (obj->flags & UNINTERESTING)
 		return;
 	obj->flags |= UNINTERESTING;
@@ -158,10 +99,7 @@ void mark_parents_uninteresting(struct commit *commit)
 		commit_list_insert(l->item, &parents);
 
 	while (parents) {
-		struct commit *commit = parents->item;
-		l = parents;
-		parents = parents->next;
-		free(l);
+		struct commit *commit = pop_commit(&parents);
 
 		while (commit) {
 			/*
@@ -172,7 +110,7 @@ void mark_parents_uninteresting(struct commit *commit)
 			 * it is popped next time around, we won't be trying
 			 * to parse it and get an error.
 			 */
-			if (!has_sha1_file(commit->object.sha1))
+			if (!has_object_file(&commit->object.oid))
 				commit->object.parsed = 1;
 
 			if (commit->object.flags & UNINTERESTING)
@@ -198,9 +136,10 @@ void mark_parents_uninteresting(struct commit *commit)
 	}
 }
 
-static void add_pending_object_with_mode(struct rev_info *revs,
+static void add_pending_object_with_path(struct rev_info *revs,
 					 struct object *obj,
-					 const char *name, unsigned mode)
+					 const char *name, unsigned mode,
+					 const char *path)
 {
 	if (!obj)
 		return;
@@ -208,7 +147,7 @@ static void add_pending_object_with_mode(struct rev_info *revs,
 		revs->no_walk = 0;
 	if (revs->reflog_info && obj->type == OBJ_COMMIT) {
 		struct strbuf buf = STRBUF_INIT;
-		int len = interpret_branch_name(name, 0, &buf);
+		int len = interpret_branch_name(name, 0, &buf, 0);
 		int st;
 
 		if (0 < len && name[len] && buf.len)
@@ -220,7 +159,14 @@ static void add_pending_object_with_mode(struct rev_info *revs,
 		if (st)
 			return;
 	}
-	add_object_array_with_mode(obj, name, &revs->pending, mode);
+	add_object_array_with_path(obj, name, &revs->pending, mode, path);
+}
+
+static void add_pending_object_with_mode(struct rev_info *revs,
+					 struct object *obj,
+					 const char *name, unsigned mode)
+{
+	add_pending_object_with_path(revs, obj, name, mode, NULL);
 }
 
 void add_pending_object(struct rev_info *revs,
@@ -265,8 +211,12 @@ void add_pending_sha1(struct rev_info *revs, const char *name,
 }
 
 static struct commit *handle_commit(struct rev_info *revs,
-				    struct object *object, const char *name)
+				    struct object_array_entry *entry)
 {
+	struct object *object = entry->item;
+	const char *name = entry->name;
+	const char *path = entry->path;
+	unsigned int mode = entry->mode;
 	unsigned long flags = object->flags;
 
 	/*
@@ -278,13 +228,20 @@ static struct commit *handle_commit(struct rev_info *revs,
 			add_pending_object(revs, object, tag->tag);
 		if (!tag->tagged)
 			die("bad tag");
-		object = parse_object(tag->tagged->sha1);
+		object = parse_object(tag->tagged->oid.hash);
 		if (!object) {
 			if (flags & UNINTERESTING)
 				return NULL;
-			die("bad object %s", sha1_to_hex(tag->tagged->sha1));
+			die("bad object %s", oid_to_hex(&tag->tagged->oid));
 		}
 		object->flags |= flags;
+		/*
+		 * We'll handle the tagged object by looping or dropping
+		 * through to the non-tag handlers below. Do not
+		 * propagate path data from the tag's pending entry.
+		 */
+		path = NULL;
+		mode = 0;
 	}
 
 	/*
@@ -300,7 +257,7 @@ static struct commit *handle_commit(struct rev_info *revs,
 			revs->limited = 1;
 		}
 		if (revs->show_source && !commit->util)
-			commit->util = (void *) name;
+			commit->util = xstrdup(name);
 		return commit;
 	}
 
@@ -316,7 +273,7 @@ static struct commit *handle_commit(struct rev_info *revs,
 			mark_tree_contents_uninteresting(tree);
 			return NULL;
 		}
-		add_pending_object(revs, object, "");
+		add_pending_object_with_path(revs, object, name, mode, path);
 		return NULL;
 	}
 
@@ -328,20 +285,30 @@ static struct commit *handle_commit(struct rev_info *revs,
 			return NULL;
 		if (flags & UNINTERESTING)
 			return NULL;
-		add_pending_object(revs, object, "");
+		add_pending_object_with_path(revs, object, name, mode, path);
 		return NULL;
 	}
 	die("%s is unknown object", name);
 }
 
-static int everybody_uninteresting(struct commit_list *orig)
+static int everybody_uninteresting(struct commit_list *orig,
+				   struct commit **interesting_cache)
 {
 	struct commit_list *list = orig;
+
+	if (*interesting_cache) {
+		struct commit *commit = *interesting_cache;
+		if (!(commit->object.flags & UNINTERESTING))
+			return 0;
+	}
+
 	while (list) {
 		struct commit *commit = list->item;
 		list = list->next;
 		if (commit->object.flags & UNINTERESTING)
 			continue;
+
+		*interesting_cache = commit;
 		return 0;
 	}
 	return 1;
@@ -473,7 +440,7 @@ static int rev_compare_tree(struct rev_info *revs,
 		 * If we are simplifying by decoration, then the commit
 		 * is worth showing if it has a tag pointing at it.
 		 */
-		if (lookup_decoration(&name_decoration, &commit->object))
+		if (get_name_decoration(&commit->object))
 			return REV_TREE_DIFFERENT;
 		/*
 		 * A commit that is not pointed by a tag is uninteresting
@@ -488,7 +455,7 @@ static int rev_compare_tree(struct rev_info *revs,
 
 	tree_difference = REV_TREE_SAME;
 	DIFF_OPT_CLR(&revs->pruning, HAS_CHANGES);
-	if (diff_tree_sha1(t1->object.sha1, t2->object.sha1, "",
+	if (diff_tree_sha1(t1->object.oid.hash, t2->object.oid.hash, "",
 			   &revs->pruning) < 0)
 		return REV_TREE_DIFFERENT;
 	return tree_difference;
@@ -504,7 +471,7 @@ static int rev_same_tree_as_empty(struct rev_info *revs, struct commit *commit)
 
 	tree_difference = REV_TREE_SAME;
 	DIFF_OPT_CLR(&revs->pruning, HAS_CHANGES);
-	retval = diff_tree_sha1(NULL, t1->object.sha1, "", &revs->pruning);
+	retval = diff_tree_sha1(NULL, t1->object.oid.hash, "", &revs->pruning);
 
 	return retval >= 0 && (tree_difference == REV_TREE_SAME);
 }
@@ -517,7 +484,7 @@ struct treesame_state {
 static struct treesame_state *initialise_treesame(struct rev_info *revs, struct commit *commit)
 {
 	unsigned n = commit_list_count(commit->parents);
-	struct treesame_state *st = xcalloc(1, sizeof(*st) + n);
+	struct treesame_state *st = xcalloc(1, st_add(sizeof(*st), n));
 	st->nparents = n;
 	add_decoration(&revs->treesame, &commit->object, st);
 	return st;
@@ -588,7 +555,7 @@ static unsigned update_treesame(struct rev_info *revs, struct commit *commit)
 
 		st = lookup_decoration(&revs->treesame, &commit->object);
 		if (!st)
-			die("update_treesame %s", sha1_to_hex(commit->object.sha1));
+			die("update_treesame %s", oid_to_hex(&commit->object.oid));
 		relevant_parents = 0;
 		relevant_change = irrelevant_change = 0;
 		for (p = commit->parents, n = 0; p; n++, p = p->next) {
@@ -686,8 +653,8 @@ static void try_to_simplify_commit(struct rev_info *revs, struct commit *commit)
 		}
 		if (parse_commit(p) < 0)
 			die("cannot simplify commit %s (because of %s)",
-			    sha1_to_hex(commit->object.sha1),
-			    sha1_to_hex(p->object.sha1));
+			    oid_to_hex(&commit->object.oid),
+			    oid_to_hex(&p->object.oid));
 		switch (rev_compare_tree(revs, p, commit)) {
 		case REV_TREE_SAME:
 			if (!revs->simplify_history || !relevant_commit(p)) {
@@ -719,8 +686,8 @@ static void try_to_simplify_commit(struct rev_info *revs, struct commit *commit)
 				 */
 				if (parse_commit(p) < 0)
 					die("cannot simplify commit %s (invalid %s)",
-					    sha1_to_hex(commit->object.sha1),
-					    sha1_to_hex(p->object.sha1));
+					    oid_to_hex(&commit->object.oid),
+					    oid_to_hex(&p->object.oid));
 				p->parents = NULL;
 			}
 		/* fallthrough */
@@ -732,7 +699,7 @@ static void try_to_simplify_commit(struct rev_info *revs, struct commit *commit)
 				irrelevant_change = 1;
 			continue;
 		}
-		die("bad tree compare for commit %s", sha1_to_hex(commit->object.sha1));
+		die("bad tree compare for commit %s", oid_to_hex(&commit->object.oid));
 	}
 
 	/*
@@ -796,7 +763,7 @@ static int add_parents_to_list(struct rev_info *revs, struct commit *commit,
 			parent = parent->next;
 			if (p)
 				p->object.flags |= UNINTERESTING;
-			if (parse_commit(p) < 0)
+			if (parse_commit_gently(p, 1) < 0)
 				continue;
 			if (p->parents)
 				mark_parents_uninteresting(p);
@@ -823,7 +790,7 @@ static int add_parents_to_list(struct rev_info *revs, struct commit *commit,
 	for (parent = commit->parents; parent; parent = parent->next) {
 		struct commit *p = parent->item;
 
-		if (parse_commit(p) < 0)
+		if (parse_commit_gently(p, revs->ignore_missing_links) < 0)
 			return -1;
 		if (revs->show_source && !p->util)
 			p->util = commit->util;
@@ -879,7 +846,7 @@ static void cherry_pick_list(struct commit_list *list, struct rev_info *revs)
 		 */
 		if (left_first != !!(flags & SYMMETRIC_LEFT))
 			continue;
-		commit->util = add_commit_patch_id(commit, &ids);
+		add_commit_patch_id(commit, &ids);
 	}
 
 	/* either cherry_mark or cherry_pick are true */
@@ -906,21 +873,9 @@ static void cherry_pick_list(struct commit_list *list, struct rev_info *revs)
 		id = has_commit_patch_id(commit, &ids);
 		if (!id)
 			continue;
-		id->seen = 1;
+
 		commit->object.flags |= cherry_flag;
-	}
-
-	/* Now check the original side for seen ones */
-	for (p = list; p; p = p->next) {
-		struct commit *commit = p->item;
-		struct patch_id *ent;
-
-		ent = commit->util;
-		if (!ent)
-			continue;
-		if (ent->seen)
-			commit->object.flags |= cherry_flag;
-		commit->util = NULL;
+		id->commit->object.flags |= cherry_flag;
 	}
 
 	free_patch_ids(&ids);
@@ -929,7 +884,8 @@ static void cherry_pick_list(struct commit_list *list, struct rev_info *revs)
 /* How many extra uninteresting commits we want to see.. */
 #define SLOP 5
 
-static int still_interesting(struct commit_list *src, unsigned long date, int slop)
+static int still_interesting(struct commit_list *src, unsigned long date, int slop,
+			     struct commit **interesting_cache)
 {
 	/*
 	 * No source list at all? We're definitely done..
@@ -948,7 +904,7 @@ static int still_interesting(struct commit_list *src, unsigned long date, int sl
 	 * Does the source list still have interesting commits in
 	 * it? Definitely not done..
 	 */
-	if (!everybody_uninteresting(src))
+	if (!everybody_uninteresting(src, interesting_cache))
 		return SLOP;
 
 	/* Ok, we're closing in.. */
@@ -1067,6 +1023,7 @@ static int limit_list(struct rev_info *revs)
 	struct commit_list *newlist = NULL;
 	struct commit_list **p = &newlist;
 	struct commit_list *bottom = NULL;
+	struct commit *interesting_cache = NULL;
 
 	if (revs->ancestry_path) {
 		bottom = collect_bottom_commits(list);
@@ -1075,13 +1032,12 @@ static int limit_list(struct rev_info *revs)
 	}
 
 	while (list) {
-		struct commit_list *entry = list;
-		struct commit *commit = list->item;
+		struct commit *commit = pop_commit(&list);
 		struct object *obj = &commit->object;
 		show_early_output_fn_t show;
 
-		list = list->next;
-		free(entry);
+		if (commit == interesting_cache)
+			interesting_cache = NULL;
 
 		if (revs->max_age != -1 && (commit->date < revs->max_age))
 			obj->flags |= UNINTERESTING;
@@ -1091,7 +1047,7 @@ static int limit_list(struct rev_info *revs)
 			mark_parents_uninteresting(commit);
 			if (revs->show_all)
 				p = &commit_list_insert(commit, p)->next;
-			slop = still_interesting(list, date, slop);
+			slop = still_interesting(list, date, slop, &interesting_cache);
 			if (slop)
 				continue;
 			/* If showing all, add the whole pending list to the end */
@@ -1166,7 +1122,7 @@ static void add_rev_cmdline_list(struct rev_info *revs,
 {
 	while (commit_list) {
 		struct object *object = &commit_list->item->object;
-		add_rev_cmdline(revs, object, sha1_to_hex(object->sha1),
+		add_rev_cmdline(revs, object, oid_to_hex(&object->oid),
 				whence, flags);
 		commit_list = commit_list->next;
 	}
@@ -1192,7 +1148,8 @@ int ref_excluded(struct string_list *ref_excludes, const char *path)
 	return 0;
 }
 
-static int handle_one_ref(const char *path, const unsigned char *sha1, int flag, void *cb_data)
+static int handle_one_ref(const char *path, const struct object_id *oid,
+			  int flag, void *cb_data)
 {
 	struct all_refs_cb *cb = cb_data;
 	struct object *object;
@@ -1200,9 +1157,9 @@ static int handle_one_ref(const char *path, const unsigned char *sha1, int flag,
 	if (ref_excluded(cb->all_revs->ref_excludes, path))
 	    return 0;
 
-	object = get_reference(cb->all_revs, path, sha1, cb->all_flags);
+	object = get_reference(cb->all_revs, path, oid->hash, cb->all_flags);
 	add_rev_cmdline(cb->all_revs, object, path, REV_CMD_REF, cb->all_flags);
-	add_pending_sha1(cb->all_revs, path, sha1, cb->all_flags);
+	add_pending_sha1(cb->all_revs, path, oid->hash, cb->all_flags);
 	return 0;
 }
 
@@ -1266,7 +1223,8 @@ static int handle_one_reflog_ent(unsigned char *osha1, unsigned char *nsha1,
 	return 0;
 }
 
-static int handle_one_reflog(const char *path, const unsigned char *sha1, int flag, void *cb_data)
+static int handle_one_reflog(const char *path, const struct object_id *oid,
+			     int flag, void *cb_data)
 {
 	struct all_refs_cb *cb = cb_data;
 	cb->warned_bad_reflog = 0;
@@ -1275,20 +1233,70 @@ static int handle_one_reflog(const char *path, const unsigned char *sha1, int fl
 	return 0;
 }
 
-static void handle_reflog(struct rev_info *revs, unsigned flags)
+void add_reflogs_to_pending(struct rev_info *revs, unsigned flags)
 {
 	struct all_refs_cb cb;
+
 	cb.all_revs = revs;
 	cb.all_flags = flags;
 	for_each_reflog(handle_one_reflog, &cb);
 }
 
-static int add_parents_only(struct rev_info *revs, const char *arg_, int flags)
+static void add_cache_tree(struct cache_tree *it, struct rev_info *revs,
+			   struct strbuf *path)
+{
+	size_t baselen = path->len;
+	int i;
+
+	if (it->entry_count >= 0) {
+		struct tree *tree = lookup_tree(it->sha1);
+		add_pending_object_with_path(revs, &tree->object, "",
+					     040000, path->buf);
+	}
+
+	for (i = 0; i < it->subtree_nr; i++) {
+		struct cache_tree_sub *sub = it->down[i];
+		strbuf_addf(path, "%s%s", baselen ? "/" : "", sub->name);
+		add_cache_tree(sub->cache_tree, revs, path);
+		strbuf_setlen(path, baselen);
+	}
+
+}
+
+void add_index_objects_to_pending(struct rev_info *revs, unsigned flags)
+{
+	int i;
+
+	read_cache();
+	for (i = 0; i < active_nr; i++) {
+		struct cache_entry *ce = active_cache[i];
+		struct blob *blob;
+
+		if (S_ISGITLINK(ce->ce_mode))
+			continue;
+
+		blob = lookup_blob(ce->oid.hash);
+		if (!blob)
+			die("unable to add index blob to traversal");
+		add_pending_object_with_path(revs, &blob->object, "",
+					     ce->ce_mode, ce->name);
+	}
+
+	if (active_cache_tree) {
+		struct strbuf path = STRBUF_INIT;
+		add_cache_tree(active_cache_tree, revs, &path);
+		strbuf_release(&path);
+	}
+}
+
+static int add_parents_only(struct rev_info *revs, const char *arg_, int flags,
+			    int exclude_parent)
 {
 	unsigned char sha1[20];
 	struct object *it;
 	struct commit *commit;
 	struct commit_list *parents;
+	int parent_number;
 	const char *arg = arg_;
 
 	if (*arg == '^') {
@@ -1305,12 +1313,20 @@ static int add_parents_only(struct rev_info *revs, const char *arg_, int flags)
 			break;
 		if (!((struct tag*)it)->tagged)
 			return 0;
-		hashcpy(sha1, ((struct tag*)it)->tagged->sha1);
+		hashcpy(sha1, ((struct tag*)it)->tagged->oid.hash);
 	}
 	if (it->type != OBJ_COMMIT)
 		return 0;
 	commit = (struct commit *)it;
-	for (parents = commit->parents; parents; parents = parents->next) {
+	if (exclude_parent &&
+	    exclude_parent > commit_list_count(commit->parents))
+		return 0;
+	for (parents = commit->parents, parent_number = 1;
+	     parents;
+	     parents = parents->next, parent_number++) {
+		if (exclude_parent && parent_number != exclude_parent)
+			continue;
+
 		it = &parents->item->object;
 		it->flags |= flags;
 		add_rev_cmdline(revs, it, arg_, REV_CMD_PARENTS_ONLY, flags);
@@ -1338,8 +1354,10 @@ void init_revisions(struct rev_info *revs, const char *prefix)
 	revs->skip_count = -1;
 	revs->max_count = -1;
 	revs->max_parents = -1;
+	revs->expand_tabs_in_log = -1;
 
 	revs->commit_format = CMIT_FMT_DEFAULT;
+	revs->expand_tabs_in_log_default = 8;
 
 	init_grep_defaults();
 	grep_init(&revs->grep_filter, prefix);
@@ -1362,7 +1380,7 @@ static void add_pending_commit_list(struct rev_info *revs,
 	while (commit_list) {
 		struct object *object = &commit_list->item->object;
 		object->flags |= flags;
-		add_pending_object(revs, object, sha1_to_hex(object->sha1));
+		add_pending_object(revs, object, oid_to_hex(&object->oid));
 		commit_list = commit_list->next;
 	}
 }
@@ -1383,7 +1401,7 @@ static void prepare_show_merge(struct rev_info *revs)
 	other = lookup_commit_or_die(sha1, "MERGE_HEAD");
 	add_pending_object(revs, &head->object, "HEAD");
 	add_pending_object(revs, &other->object, "MERGE_HEAD");
-	bases = get_merge_bases(head, other, 1);
+	bases = get_merge_bases(head, other);
 	add_rev_cmdline_list(revs, bases, REV_CMD_MERGE_BASE, UNINTERESTING | BOTTOM);
 	add_pending_commit_list(revs, bases, UNINTERESTING | BOTTOM);
 	free_commit_list(bases);
@@ -1397,7 +1415,7 @@ static void prepare_show_merge(struct rev_info *revs)
 			continue;
 		if (ce_path_match(ce, &revs->prune_data, NULL)) {
 			prune_num++;
-			prune = xrealloc(prune, sizeof(*prune) * prune_num);
+			REALLOC_ARRAY(prune, prune_num);
 			prune[prune_num-2] = ce->name;
 			prune[prune_num-1] = NULL;
 		}
@@ -1405,7 +1423,7 @@ static void prepare_show_merge(struct rev_info *revs)
 		       ce_same_name(ce, active_cache[i+1]))
 			i++;
 	}
-	free_pathspec(&revs->prune_data);
+	clear_pathspec(&revs->prune_data);
 	parse_pathspec(&revs->prune_data, PATHSPEC_ALL_MAGIC & ~PATHSPEC_LITERAL,
 		       PATHSPEC_PREFER_FULL | PATHSPEC_LITERAL_PATH, "", prune);
 	revs->limited = 1;
@@ -1482,13 +1500,13 @@ int handle_revision_arg(const char *arg_, struct rev_info *revs, int flags, unsi
 
 				a = (a_obj->type == OBJ_COMMIT
 				     ? (struct commit *)a_obj
-				     : lookup_commit_reference(a_obj->sha1));
+				     : lookup_commit_reference(a_obj->oid.hash));
 				b = (b_obj->type == OBJ_COMMIT
 				     ? (struct commit *)b_obj
-				     : lookup_commit_reference(b_obj->sha1));
+				     : lookup_commit_reference(b_obj->oid.hash));
 				if (!a || !b)
 					goto missing;
-				exclude = get_merge_bases(a, b, 1);
+				exclude = get_merge_bases(a, b);
 				add_rev_cmdline_list(revs, exclude,
 						     REV_CMD_MERGE_BASE,
 						     flags_exclude);
@@ -1511,17 +1529,33 @@ int handle_revision_arg(const char *arg_, struct rev_info *revs, int flags, unsi
 		}
 		*dotdot = '.';
 	}
+
 	dotdot = strstr(arg, "^@");
 	if (dotdot && !dotdot[2]) {
 		*dotdot = 0;
-		if (add_parents_only(revs, arg, flags))
+		if (add_parents_only(revs, arg, flags, 0))
 			return 0;
 		*dotdot = '^';
 	}
 	dotdot = strstr(arg, "^!");
 	if (dotdot && !dotdot[2]) {
 		*dotdot = 0;
-		if (!add_parents_only(revs, arg, flags ^ (UNINTERESTING | BOTTOM)))
+		if (!add_parents_only(revs, arg, flags ^ (UNINTERESTING | BOTTOM), 0))
+			*dotdot = '^';
+	}
+	dotdot = strstr(arg, "^-");
+	if (dotdot) {
+		int exclude_parent = 1;
+
+		if (dotdot[2]) {
+			char *end;
+			exclude_parent = strtoul(dotdot + 2, &end, 10);
+			if (*end != '\0' || !exclude_parent)
+				return -1;
+		}
+
+		*dotdot = 0;
+		if (!add_parents_only(revs, arg, flags ^ (UNINTERESTING | BOTTOM), exclude_parent))
 			*dotdot = '^';
 	}
 
@@ -1561,10 +1595,7 @@ static void append_prune_data(struct cmdline_pathspec *prune, const char **av)
 static void read_pathspec_from_stdin(struct rev_info *revs, struct strbuf *sb,
 				     struct cmdline_pathspec *prune)
 {
-	while (strbuf_getwholeline(sb, stdin, '\n') != EOF) {
-		int len = sb->len;
-		if (len && sb->buf[len - 1] == '\n')
-			sb->buf[--len] = '\0';
+	while (strbuf_getline(sb, stdin) != EOF) {
 		ALLOC_GROW(prune->path, prune->nr + 1, prune->alloc);
 		prune->path[prune->nr++] = xstrdup(sb->buf);
 	}
@@ -1575,12 +1606,14 @@ static void read_revisions_from_stdin(struct rev_info *revs,
 {
 	struct strbuf sb;
 	int seen_dashdash = 0;
+	int save_warning;
+
+	save_warning = warn_on_object_refname_ambiguity;
+	warn_on_object_refname_ambiguity = 0;
 
 	strbuf_init(&sb, 1000);
-	while (strbuf_getwholeline(&sb, stdin, '\n') != EOF) {
+	while (strbuf_getline(&sb, stdin) != EOF) {
 		int len = sb.len;
-		if (len && sb.buf[len - 1] == '\n')
-			sb.buf[--len] = '\0';
 		if (!len)
 			break;
 		if (sb.buf[0] == '-') {
@@ -1596,7 +1629,9 @@ static void read_revisions_from_stdin(struct rev_info *revs,
 	}
 	if (seen_dashdash)
 		read_pathspec_from_stdin(revs, &sb, prune);
+
 	strbuf_release(&sb);
+	warn_on_object_refname_ambiguity = save_warning;
 }
 
 static void add_grep(struct rev_info *revs, const char *ptn, enum grep_pat_token what)
@@ -1627,6 +1662,8 @@ static int handle_revision_opt(struct rev_info *revs, int argc, const char **arg
 	    !strcmp(arg, "--reflog") || !strcmp(arg, "--not") ||
 	    !strcmp(arg, "--no-walk") || !strcmp(arg, "--do-walk") ||
 	    !strcmp(arg, "--bisect") || starts_with(arg, "--glob=") ||
+	    !strcmp(arg, "--indexed-objects") ||
+	    starts_with(arg, "--exclude=") ||
 	    starts_with(arg, "--branches=") || starts_with(arg, "--tags=") ||
 	    starts_with(arg, "--remotes=") || starts_with(arg, "--no-walk="))
 	{
@@ -1642,8 +1679,10 @@ static int handle_revision_opt(struct rev_info *revs, int argc, const char **arg
 		revs->skip_count = atoi(optarg);
 		return argcount;
 	} else if ((*arg == '-') && isdigit(arg[1])) {
-	/* accept -<digit>, like traditional "head" */
-		revs->max_count = atoi(arg + 1);
+		/* accept -<digit>, like traditional "head" */
+		if (strtol_i(arg + 1, 10, &revs->max_count) < 0 ||
+		    revs->max_count < 0)
+			die("'%s': not a non-negative integer", arg + 1);
 		revs->no_walk = 0;
 	} else if (!strcmp(arg, "-n")) {
 		if (argc <= 1)
@@ -1785,6 +1824,12 @@ static int handle_revision_opt(struct rev_info *revs, int argc, const char **arg
 		revs->tree_objects = 1;
 		revs->blob_objects = 1;
 		revs->edge_hint = 1;
+	} else if (!strcmp(arg, "--objects-edge-aggressive")) {
+		revs->tag_objects = 1;
+		revs->tree_objects = 1;
+		revs->blob_objects = 1;
+		revs->edge_hint = 1;
+		revs->edge_hint_aggressive = 1;
 	} else if (!strcmp(arg, "--verify-objects")) {
 		revs->tag_objects = 1;
 		revs->tree_objects = 1;
@@ -1816,7 +1861,7 @@ static int handle_revision_opt(struct rev_info *revs, int argc, const char **arg
 	} else if (!strcmp(arg, "--pretty")) {
 		revs->verbose_header = 1;
 		revs->pretty_given = 1;
-		get_commit_format(arg+8, revs);
+		get_commit_format(NULL, revs);
 	} else if (starts_with(arg, "--pretty=") || starts_with(arg, "--format=")) {
 		/*
 		 * Detached form ("--pretty X" as opposed to "--pretty=X")
@@ -1825,12 +1870,31 @@ static int handle_revision_opt(struct rev_info *revs, int argc, const char **arg
 		revs->verbose_header = 1;
 		revs->pretty_given = 1;
 		get_commit_format(arg+9, revs);
+	} else if (!strcmp(arg, "--expand-tabs")) {
+		revs->expand_tabs_in_log = 8;
+	} else if (!strcmp(arg, "--no-expand-tabs")) {
+		revs->expand_tabs_in_log = 0;
+	} else if (skip_prefix(arg, "--expand-tabs=", &arg)) {
+		int val;
+		if (strtol_i(arg, 10, &val) < 0 || val < 0)
+			die("'%s': not a non-negative integer", arg);
+		revs->expand_tabs_in_log = val;
 	} else if (!strcmp(arg, "--show-notes") || !strcmp(arg, "--notes")) {
 		revs->show_notes = 1;
 		revs->show_notes_given = 1;
 		revs->notes_opt.use_default_notes = 1;
 	} else if (!strcmp(arg, "--show-signature")) {
 		revs->show_signature = 1;
+	} else if (!strcmp(arg, "--no-show-signature")) {
+		revs->show_signature = 0;
+	} else if (!strcmp(arg, "--show-linear-break") ||
+		   starts_with(arg, "--show-linear-break=")) {
+		if (starts_with(arg, "--show-linear-break="))
+			revs->break_bar = xstrdup(arg + 20);
+		else
+			revs->break_bar = "                    ..........";
+		revs->track_linear = 1;
+		revs->track_first_time = 1;
 	} else if (starts_with(arg, "--show-notes=") ||
 		   starts_with(arg, "--notes=")) {
 		struct strbuf buf = STRBUF_INIT;
@@ -1896,10 +1960,10 @@ static int handle_revision_opt(struct rev_info *revs, int argc, const char **arg
 	} else if (!strcmp(arg, "--full-history")) {
 		revs->simplify_history = 0;
 	} else if (!strcmp(arg, "--relative-date")) {
-		revs->date_mode = DATE_RELATIVE;
+		revs->date_mode.type = DATE_RELATIVE;
 		revs->date_mode_explicit = 1;
 	} else if ((argcount = parse_long_opt("date", argv, &optarg))) {
-		revs->date_mode = parse_date_format(optarg);
+		parse_date_format(optarg, &revs->date_mode);
 		revs->date_mode_explicit = 1;
 		return argcount;
 	} else if (!strcmp(arg, "--log-size")) {
@@ -1923,18 +1987,20 @@ static int handle_revision_opt(struct rev_info *revs, int argc, const char **arg
 	} else if (!strcmp(arg, "--grep-debug")) {
 		revs->grep_filter.debug = 1;
 	} else if (!strcmp(arg, "--basic-regexp")) {
-		grep_set_pattern_type_option(GREP_PATTERN_TYPE_BRE, &revs->grep_filter);
+		revs->grep_filter.pattern_type_option = GREP_PATTERN_TYPE_BRE;
 	} else if (!strcmp(arg, "--extended-regexp") || !strcmp(arg, "-E")) {
-		grep_set_pattern_type_option(GREP_PATTERN_TYPE_ERE, &revs->grep_filter);
+		revs->grep_filter.pattern_type_option = GREP_PATTERN_TYPE_ERE;
 	} else if (!strcmp(arg, "--regexp-ignore-case") || !strcmp(arg, "-i")) {
 		revs->grep_filter.regflags |= REG_ICASE;
 		DIFF_OPT_SET(&revs->diffopt, PICKAXE_IGNORE_CASE);
 	} else if (!strcmp(arg, "--fixed-strings") || !strcmp(arg, "-F")) {
-		grep_set_pattern_type_option(GREP_PATTERN_TYPE_FIXED, &revs->grep_filter);
+		revs->grep_filter.pattern_type_option = GREP_PATTERN_TYPE_FIXED;
 	} else if (!strcmp(arg, "--perl-regexp")) {
-		grep_set_pattern_type_option(GREP_PATTERN_TYPE_PCRE, &revs->grep_filter);
+		revs->grep_filter.pattern_type_option = GREP_PATTERN_TYPE_PCRE;
 	} else if (!strcmp(arg, "--all-match")) {
 		revs->grep_filter.all_match = 1;
+	} else if (!strcmp(arg, "--invert-grep")) {
+		revs->invert_grep = 1;
 	} else if ((argcount = parse_long_opt("encoding", argv, &optarg))) {
 		if (strcmp(optarg, "none"))
 			git_log_output_encoding = xstrdup(optarg);
@@ -1949,11 +2015,13 @@ static int handle_revision_opt(struct rev_info *revs, int argc, const char **arg
 	} else if (!strcmp(arg, "--ignore-missing")) {
 		revs->ignore_missing = 1;
 	} else {
-		int opts = diff_opt_parse(&revs->diffopt, argv, argc);
+		int opts = diff_opt_parse(&revs->diffopt, argv, argc, revs->prefix);
 		if (!opts)
 			unkv[(*unkc)++] = arg;
 		return opts;
 	}
+	if (revs->graph && revs->track_linear)
+		die("--show-linear-break and --graph are incompatible");
 
 	return 1;
 }
@@ -1972,14 +2040,23 @@ void parse_revision_opt(struct rev_info *revs, struct parse_opt_ctx_t *ctx,
 	ctx->argc -= n;
 }
 
+static int for_each_bisect_ref(const char *submodule, each_ref_fn fn, void *cb_data, const char *term) {
+	struct strbuf bisect_refs = STRBUF_INIT;
+	int status;
+	strbuf_addf(&bisect_refs, "refs/bisect/%s", term);
+	status = for_each_ref_in_submodule(submodule, bisect_refs.buf, fn, cb_data);
+	strbuf_release(&bisect_refs);
+	return status;
+}
+
 static int for_each_bad_bisect_ref(const char *submodule, each_ref_fn fn, void *cb_data)
 {
-	return for_each_ref_in_submodule(submodule, "refs/bisect/bad", fn, cb_data);
+	return for_each_bisect_ref(submodule, fn, cb_data, term_bad);
 }
 
 static int for_each_good_bisect_ref(const char *submodule, each_ref_fn fn, void *cb_data)
 {
-	return for_each_ref_in_submodule(submodule, "refs/bisect/good", fn, cb_data);
+	return for_each_bisect_ref(submodule, fn, cb_data, term_good);
 }
 
 static int handle_revision_pseudo_opt(const char *submodule,
@@ -2008,6 +2085,7 @@ static int handle_revision_pseudo_opt(const char *submodule,
 		handle_refs(submodule, revs, *flags, for_each_branch_ref_submodule);
 		clear_ref_exclusion(&revs->ref_excludes);
 	} else if (!strcmp(arg, "--bisect")) {
+		read_bisect_terms(&term_bad, &term_good);
 		handle_refs(submodule, revs, *flags, for_each_bad_bisect_ref);
 		handle_refs(submodule, revs, *flags ^ (UNINTERESTING | BOTTOM), for_each_good_bisect_ref);
 		revs->bisect = 1;
@@ -2042,7 +2120,9 @@ static int handle_revision_pseudo_opt(const char *submodule,
 		for_each_glob_ref_in(handle_one_ref, arg + 10, "refs/remotes/", &cb);
 		clear_ref_exclusion(&revs->ref_excludes);
 	} else if (!strcmp(arg, "--reflog")) {
-		handle_reflog(revs, *flags);
+		add_reflogs_to_pending(revs, *flags);
+	} else if (!strcmp(arg, "--indexed-objects")) {
+		add_index_objects_to_pending(revs, *flags);
 	} else if (!strcmp(arg, "--not")) {
 		*flags ^= UNINTERESTING | BOTTOM;
 	} else if (!strcmp(arg, "--no-walk")) {
@@ -2065,6 +2145,21 @@ static int handle_revision_pseudo_opt(const char *submodule,
 	}
 
 	return 1;
+}
+
+static void NORETURN diagnose_missing_default(const char *def)
+{
+	unsigned char sha1[20];
+	int flags;
+	const char *refname;
+
+	refname = resolve_ref_unsafe(def, 0, sha1, &flags);
+	if (!refname || !(flags & REF_ISSYMREF) || (flags & REF_ISBROKEN))
+		die(_("your current branch appears to be broken"));
+
+	skip_prefix(refname, "refs/heads/", &refname);
+	die(_("your current branch '%s' does not have any commits yet"),
+	    refname);
 }
 
 /*
@@ -2196,7 +2291,7 @@ int setup_revisions(int argc, const char **argv, struct rev_info *revs, struct s
 		struct object *object;
 		struct object_context oc;
 		if (get_sha1_with_context(revs->def, 0, sha1, &oc))
-			die("bad default revision '%s'", revs->def);
+			diagnose_missing_default(revs->def);
 		object = get_reference(revs, revs->def, sha1, 0);
 		add_pending_object_with_mode(revs, object, revs->def, oc.mode);
 	}
@@ -2251,8 +2346,16 @@ int setup_revisions(int argc, const char **argv, struct rev_info *revs, struct s
 
 	if (revs->reflog_info && revs->graph)
 		die("cannot combine --walk-reflogs with --graph");
+	if (revs->no_walk && revs->graph)
+		die("cannot combine --no-walk with --graph");
 	if (!revs->reflog_info && revs->grep_filter.use_reflog_filter)
 		die("cannot use --grep-reflog without --walk-reflogs");
+
+	if (revs->first_parent_only && revs->bisect)
+		die(_("--first-parent is incompatible with --bisect"));
+
+	if (revs->expand_tabs_in_log < 0)
+		revs->expand_tabs_in_log = revs->expand_tabs_in_log_default;
 
 	return left;
 }
@@ -2593,10 +2696,7 @@ static void simplify_merges(struct rev_info *revs)
 		yet_to_do = NULL;
 		tail = &yet_to_do;
 		while (list) {
-			commit = list->item;
-			next = list->next;
-			free(list);
-			list = next;
+			commit = pop_commit(&list);
 			tail = simplify_one(revs, commit, tail);
 		}
 	}
@@ -2608,10 +2708,7 @@ static void simplify_merges(struct rev_info *revs)
 	while (list) {
 		struct merge_simplify_state *st;
 
-		commit = list->item;
-		next = list->next;
-		free(list);
-		list = next;
+		commit = pop_commit(&list);
 		st = locate_simplify_state(revs, commit);
 		if (st->simplified == commit)
 			tail = &commit_list_insert(commit, tail)->next;
@@ -2637,26 +2734,26 @@ void reset_revision_walk(void)
 
 int prepare_revision_walk(struct rev_info *revs)
 {
-	int nr = revs->pending.nr;
-	struct object_array_entry *e, *list;
+	int i;
+	struct object_array old_pending;
 	struct commit_list **next = &revs->commits;
 
-	e = list = revs->pending.objects;
+	memcpy(&old_pending, &revs->pending, sizeof(old_pending));
 	revs->pending.nr = 0;
 	revs->pending.alloc = 0;
 	revs->pending.objects = NULL;
-	while (--nr >= 0) {
-		struct commit *commit = handle_commit(revs, e->item, e->name);
+	for (i = 0; i < old_pending.nr; i++) {
+		struct object_array_entry *e = old_pending.objects + i;
+		struct commit *commit = handle_commit(revs, e);
 		if (commit) {
 			if (!(commit->object.flags & SEEN)) {
 				commit->object.flags |= SEEN;
 				next = commit_list_append(commit, next);
 			}
 		}
-		e++;
 	}
 	if (!revs->leak_pending)
-		free(list);
+		object_array_clear(&old_pending);
 
 	/* Signal whether we need per-parent treesame decoration */
 	if (revs->simplify_merges ||
@@ -2772,7 +2869,7 @@ static int commit_match(struct commit *commit, struct rev_info *opt)
 {
 	int retval;
 	const char *encoding;
-	char *message;
+	const char *message;
 	struct strbuf buf = STRBUF_INIT;
 
 	if (!opt->grep_filter.pattern_list && !opt->grep_filter.header_list)
@@ -2811,18 +2908,25 @@ static int commit_match(struct commit *commit, struct rev_info *opt)
 	if (opt->show_notes) {
 		if (!buf.len)
 			strbuf_addstr(&buf, message);
-		format_display_notes(commit->object.sha1, &buf, encoding, 1);
+		format_display_notes(commit->object.oid.hash, &buf, encoding, 1);
 	}
 
-	/* Find either in the original commit message, or in the temporary */
+	/*
+	 * Find either in the original commit message, or in the temporary.
+	 * Note that we cast away the constness of "message" here. It is
+	 * const because it may come from the cached commit buffer. That's OK,
+	 * because we know that it is modifiable heap memory, and that while
+	 * grep_buffer may modify it for speed, it will restore any
+	 * changes before returning.
+	 */
 	if (buf.len)
 		retval = grep_buffer(&opt->grep_filter, buf.buf, buf.len);
 	else
 		retval = grep_buffer(&opt->grep_filter,
-				     message, strlen(message));
+				     (char *)message, strlen(message));
 	strbuf_release(&buf);
-	logmsg_free(message, commit);
-	return retval;
+	unuse_commit_buffer(commit, message);
+	return opt->invert_grep ? !retval : retval;
 }
 
 static inline int want_ancestry(const struct rev_info *revs)
@@ -2834,7 +2938,7 @@ enum commit_action get_commit_action(struct rev_info *revs, struct commit *commi
 {
 	if (commit->object.flags & SHOWN)
 		return commit_ignore;
-	if (revs->unpacked && has_sha1_pack(commit->object.sha1))
+	if (revs->unpacked && has_sha1_pack(commit->object.oid.hash))
 		return commit_ignore;
 	if (revs->show_all)
 		return commit_show;
@@ -2875,6 +2979,61 @@ enum commit_action get_commit_action(struct rev_info *revs, struct commit *commi
 	return commit_show;
 }
 
+define_commit_slab(saved_parents, struct commit_list *);
+
+#define EMPTY_PARENT_LIST ((struct commit_list *)-1)
+
+/*
+ * You may only call save_parents() once per commit (this is checked
+ * for non-root commits).
+ */
+static void save_parents(struct rev_info *revs, struct commit *commit)
+{
+	struct commit_list **pp;
+
+	if (!revs->saved_parents_slab) {
+		revs->saved_parents_slab = xmalloc(sizeof(struct saved_parents));
+		init_saved_parents(revs->saved_parents_slab);
+	}
+
+	pp = saved_parents_at(revs->saved_parents_slab, commit);
+
+	/*
+	 * When walking with reflogs, we may visit the same commit
+	 * several times: once for each appearance in the reflog.
+	 *
+	 * In this case, save_parents() will be called multiple times.
+	 * We want to keep only the first set of parents.  We need to
+	 * store a sentinel value for an empty (i.e., NULL) parent
+	 * list to distinguish it from a not-yet-saved list, however.
+	 */
+	if (*pp)
+		return;
+	if (commit->parents)
+		*pp = copy_commit_list(commit->parents);
+	else
+		*pp = EMPTY_PARENT_LIST;
+}
+
+static void free_saved_parents(struct rev_info *revs)
+{
+	if (revs->saved_parents_slab)
+		clear_saved_parents(revs->saved_parents_slab);
+}
+
+struct commit_list *get_saved_parents(struct rev_info *revs, const struct commit *commit)
+{
+	struct commit_list *parents;
+
+	if (!revs->saved_parents_slab)
+		return commit->parents;
+
+	parents = *saved_parents_at(revs->saved_parents_slab, commit);
+	if (parents == EMPTY_PARENT_LIST)
+		return NULL;
+	return parents;
+}
+
 enum commit_action simplify_commit(struct rev_info *revs, struct commit *commit)
 {
 	enum commit_action action = get_commit_action(revs, commit);
@@ -2896,17 +3055,34 @@ enum commit_action simplify_commit(struct rev_info *revs, struct commit *commit)
 	return action;
 }
 
+static void track_linear(struct rev_info *revs, struct commit *commit)
+{
+	if (revs->track_first_time) {
+		revs->linear = 1;
+		revs->track_first_time = 0;
+	} else {
+		struct commit_list *p;
+		for (p = revs->previous_parents; p; p = p->next)
+			if (p->item == NULL || /* first commit */
+			    !oidcmp(&p->item->object.oid, &commit->object.oid))
+				break;
+		revs->linear = p != NULL;
+	}
+	if (revs->reverse) {
+		if (revs->linear)
+			commit->object.flags |= TRACK_LINEAR;
+	}
+	free_commit_list(revs->previous_parents);
+	revs->previous_parents = copy_commit_list(commit->parents);
+}
+
 static struct commit *get_revision_1(struct rev_info *revs)
 {
 	if (!revs->commits)
 		return NULL;
 
 	do {
-		struct commit_list *entry = revs->commits;
-		struct commit *commit = entry->item;
-
-		revs->commits = entry->next;
-		free(entry);
+		struct commit *commit = pop_commit(&revs->commits);
 
 		if (revs->reflog_info) {
 			save_parents(revs, commit);
@@ -2923,9 +3099,11 @@ static struct commit *get_revision_1(struct rev_info *revs)
 			if (revs->max_age != -1 &&
 			    (commit->date < revs->max_age))
 				continue;
-			if (add_parents_to_list(revs, commit, &revs->commits, NULL) < 0)
-				die("Failed to traverse parents of commit %s",
-				    sha1_to_hex(commit->object.sha1));
+			if (add_parents_to_list(revs, commit, &revs->commits, NULL) < 0) {
+				if (!revs->ignore_missing_links)
+					die("Failed to traverse parents of commit %s",
+						oid_to_hex(&commit->object.oid));
+			}
 		}
 
 		switch (simplify_commit(revs, commit)) {
@@ -2933,8 +3111,10 @@ static struct commit *get_revision_1(struct rev_info *revs)
 			continue;
 		case commit_error:
 			die("Failed to simplify parents of commit %s",
-			    sha1_to_hex(commit->object.sha1));
+			    oid_to_hex(&commit->object.oid));
 		default:
+			if (revs->track_linear)
+				track_linear(revs, commit);
 			return commit;
 		}
 	} while (revs->commits);
@@ -3101,14 +3281,23 @@ struct commit *get_revision(struct rev_info *revs)
 		revs->reverse_output_stage = 1;
 	}
 
-	if (revs->reverse_output_stage)
-		return pop_commit(&revs->commits);
+	if (revs->reverse_output_stage) {
+		c = pop_commit(&revs->commits);
+		if (revs->track_linear)
+			revs->linear = !!(c && c->object.flags & TRACK_LINEAR);
+		return c;
+	}
 
 	c = get_revision_internal(revs);
 	if (c && revs->graph)
 		graph_update(revs->graph, c);
-	if (!c)
+	if (!c) {
 		free_saved_parents(revs);
+		if (revs->previous_parents) {
+			free_commit_list(revs->previous_parents);
+			revs->previous_parents = NULL;
+		}
+	}
 	return c;
 }
 
@@ -3139,55 +3328,4 @@ void put_revision_mark(const struct rev_info *revs, const struct commit *commit)
 		return;
 	fputs(mark, stdout);
 	putchar(' ');
-}
-
-define_commit_slab(saved_parents, struct commit_list *);
-
-#define EMPTY_PARENT_LIST ((struct commit_list *)-1)
-
-void save_parents(struct rev_info *revs, struct commit *commit)
-{
-	struct commit_list **pp;
-
-	if (!revs->saved_parents_slab) {
-		revs->saved_parents_slab = xmalloc(sizeof(struct saved_parents));
-		init_saved_parents(revs->saved_parents_slab);
-	}
-
-	pp = saved_parents_at(revs->saved_parents_slab, commit);
-
-	/*
-	 * When walking with reflogs, we may visit the same commit
-	 * several times: once for each appearance in the reflog.
-	 *
-	 * In this case, save_parents() will be called multiple times.
-	 * We want to keep only the first set of parents.  We need to
-	 * store a sentinel value for an empty (i.e., NULL) parent
-	 * list to distinguish it from a not-yet-saved list, however.
-	 */
-	if (*pp)
-		return;
-	if (commit->parents)
-		*pp = copy_commit_list(commit->parents);
-	else
-		*pp = EMPTY_PARENT_LIST;
-}
-
-struct commit_list *get_saved_parents(struct rev_info *revs, const struct commit *commit)
-{
-	struct commit_list *parents;
-
-	if (!revs->saved_parents_slab)
-		return commit->parents;
-
-	parents = *saved_parents_at(revs->saved_parents_slab, commit);
-	if (parents == EMPTY_PARENT_LIST)
-		return NULL;
-	return parents;
-}
-
-void free_saved_parents(struct rev_info *revs)
-{
-	if (revs->saved_parents_slab)
-		clear_saved_parents(revs->saved_parents_slab);
 }

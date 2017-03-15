@@ -4,8 +4,8 @@
 #include "parse-options.h"
 
 static const char * const git_symbolic_ref_usage[] = {
-	N_("git symbolic-ref [options] name [ref]"),
-	N_("git symbolic-ref -d [-q] name"),
+	N_("git symbolic-ref [<options>] <name> [<ref>]"),
+	N_("git symbolic-ref -d [-q] <name>"),
 	NULL
 };
 
@@ -13,7 +13,7 @@ static int check_symref(const char *HEAD, int quiet, int shorten, int print)
 {
 	unsigned char sha1[20];
 	int flag;
-	const char *refname = resolve_ref_unsafe(HEAD, sha1, 0, &flag);
+	const char *refname = resolve_ref_unsafe(HEAD, 0, sha1, &flag);
 
 	if (!refname)
 		die("No such ref: %s", HEAD);
@@ -56,7 +56,9 @@ int cmd_symbolic_ref(int argc, const char **argv, const char *prefix)
 		ret = check_symref(argv[0], 1, 0, 0);
 		if (ret)
 			die("Cannot delete %s, not a symbolic ref", argv[0]);
-		return delete_ref(argv[0], NULL, REF_NODEREF);
+		if (!strcmp(argv[0], "HEAD"))
+			die("deleting '%s' is not allowed", argv[0]);
+		return delete_ref(NULL, argv[0], NULL, REF_NODEREF);
 	}
 
 	switch (argc) {
@@ -67,7 +69,7 @@ int cmd_symbolic_ref(int argc, const char **argv, const char *prefix)
 		if (!strcmp(argv[0], "HEAD") &&
 		    !starts_with(argv[1], "refs/"))
 			die("Refusing to point HEAD outside of refs/");
-		create_symref(argv[0], argv[1], msg);
+		ret = !!create_symref(argv[0], argv[1], msg);
 		break;
 	default:
 		usage_with_options(git_symbolic_ref_usage, options);

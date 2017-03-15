@@ -23,22 +23,41 @@
  */
 
 #include "cache.h"
+#include "credential.h"
 #include "exec_cmd.h"
 #include "run-command.h"
-#include "prompt.h"
+#include "parse-options.h"
 #ifdef NO_OPENSSL
 typedef void *SSL;
 #endif
+#ifdef USE_CURL_FOR_IMAP_SEND
+#include "http.h"
+#endif
 
-static const char imap_send_usage[] = "git imap-send < <mbox>";
+#if defined(USE_CURL_FOR_IMAP_SEND) && defined(NO_OPENSSL)
+/* only available option */
+#define USE_CURL_DEFAULT 1
+#else
+/* strictly opt in */
+#define USE_CURL_DEFAULT 0
+#endif
+
+static int verbosity;
+static int use_curl = USE_CURL_DEFAULT;
+
+static const char * const imap_send_usage[] = { "git imap-send [-v] [-q] [--[no-]curl] < <mbox>", NULL };
+
+static struct option imap_send_options[] = {
+	OPT__VERBOSITY(&verbosity),
+	OPT_BOOL(0, "curl", &use_curl, "use libcurl to communicate with the IMAP server"),
+	OPT_END()
+};
 
 #undef DRV_OK
 #define DRV_OK          0
 #define DRV_MSG_BAD     -1
 #define DRV_BOX_BAD     -2
 #define DRV_STORE_BAD   -3
-
-static int Verbose, Quiet;
 
 __attribute__((format (printf, 1, 2)))
 static void imap_info(const char *, ...);
@@ -69,6 +88,7 @@ struct imap_server_conf {
 	char *tunnel;
 	char *host;
 	int port;
+	char *folder;
 	char *user;
 	char *pass;
 	int use_ssl;
@@ -82,6 +102,7 @@ static struct imap_server_conf server = {
 	NULL,	/* tunnel */
 	NULL,	/* host */
 	0,	/* port */
+	NULL,	/* folder */
 	NULL,	/* user */
 	NULL,	/* pass */
 	0,   	/* use_ssl */
@@ -128,7 +149,6 @@ struct imap_cmd_cb {
 	char *data;
 	int dlen;
 	int uid;
-	unsigned create:1, trycreate:1;
 };
 
 struct imap_cmd {
@@ -267,17 +287,20 @@ static int ssl_socket_connect(struct imap_socket *sock, int use_tls_only, int ve
 	SSL_library_init();
 	SSL_load_error_strings();
 
-	if (use_tls_only)
-		meth = TLSv1_method();
-	else
-		meth = SSLv23_method();
-
+	meth = SSLv23_method();
 	if (!meth) {
 		ssl_socket_perror("SSLv23_method");
 		return -1;
 	}
 
 	ctx = SSL_CTX_new(meth);
+	if (!ctx) {
+		ssl_socket_perror("SSL_CTX_new");
+		return -1;
+	}
+
+	if (use_tls_only)
+		SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3);
 
 	if (verify)
 		SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
@@ -417,7 +440,7 @@ static int buffer_gets(struct imap_buffer *b, char **s)
 			if (b->buf[b->offset + 1] == '\n') {
 				b->buf[b->offset] = 0;  /* terminate the string */
 				b->offset += 2; /* next line */
-				if (Verbose)
+				if (0 < verbosity)
 					puts(*s);
 				return 0;
 			}
@@ -432,7 +455,7 @@ static void imap_info(const char *msg, ...)
 {
 	va_list va;
 
-	if (!Quiet) {
+	if (0 <= verbosity) {
 		va_start(va, msg);
 		vprintf(msg, va);
 		va_end(va);
@@ -444,7 +467,7 @@ static void imap_warn(const char *msg, ...)
 {
 	va_list va;
 
-	if (Quiet < 2) {
+	if (-2 < verbosity) {
 		va_start(va, msg);
 		vfprintf(stderr, msg, va);
 		va_end(va);
@@ -488,14 +511,14 @@ static int nfsnprintf(char *buf, int blen, const char *fmt, ...)
 
 	va_start(va, fmt);
 	if (blen <= 0 || (unsigned)(ret = vsnprintf(buf, blen, fmt, va)) >= (unsigned)blen)
-		die("Fatal: buffer too small. Please report a bug.");
+		die("BUG: buffer too small. Please report a bug.");
 	va_end(va);
 	return ret;
 }
 
-static struct imap_cmd *v_issue_imap_cmd(struct imap_store *ctx,
-					 struct imap_cmd_cb *cb,
-					 const char *fmt, va_list ap)
+static struct imap_cmd *issue_imap_cmd(struct imap_store *ctx,
+				       struct imap_cmd_cb *cb,
+				       const char *fmt, va_list ap)
 {
 	struct imap *imap = ctx->imap;
 	struct imap_cmd *cmd;
@@ -521,10 +544,10 @@ static struct imap_cmd *v_issue_imap_cmd(struct imap_store *ctx,
 				  cmd->tag, cmd->cmd, cmd->cb.dlen,
 				  CAP(LITERALPLUS) ? "+" : "");
 
-	if (Verbose) {
+	if (0 < verbosity) {
 		if (imap->num_in_progress)
 			printf("(%d in progress) ", imap->num_in_progress);
-		if (memcmp(cmd->cmd, "LOGIN", 5))
+		if (!starts_with(cmd->cmd, "LOGIN"))
 			printf(">>> %s", buf);
 		else
 			printf(">>> %d LOGIN <user> <pass>\n", cmd->tag);
@@ -559,20 +582,6 @@ static struct imap_cmd *v_issue_imap_cmd(struct imap_store *ctx,
 }
 
 __attribute__((format (printf, 3, 4)))
-static struct imap_cmd *issue_imap_cmd(struct imap_store *ctx,
-				       struct imap_cmd_cb *cb,
-				       const char *fmt, ...)
-{
-	struct imap_cmd *ret;
-	va_list ap;
-
-	va_start(ap, fmt);
-	ret = v_issue_imap_cmd(ctx, cb, fmt, ap);
-	va_end(ap);
-	return ret;
-}
-
-__attribute__((format (printf, 3, 4)))
 static int imap_exec(struct imap_store *ctx, struct imap_cmd_cb *cb,
 		     const char *fmt, ...)
 {
@@ -580,7 +589,7 @@ static int imap_exec(struct imap_store *ctx, struct imap_cmd_cb *cb,
 	struct imap_cmd *cmdp;
 
 	va_start(ap, fmt);
-	cmdp = v_issue_imap_cmd(ctx, cb, fmt, ap);
+	cmdp = issue_imap_cmd(ctx, cb, fmt, ap);
 	va_end(ap);
 	if (!cmdp)
 		return RESP_BAD;
@@ -596,7 +605,7 @@ static int imap_exec_m(struct imap_store *ctx, struct imap_cmd_cb *cb,
 	struct imap_cmd *cmdp;
 
 	va_start(ap, fmt);
-	cmdp = v_issue_imap_cmd(ctx, cb, fmt, ap);
+	cmdp = issue_imap_cmd(ctx, cb, fmt, ap);
 	va_end(ap);
 	if (!cmdp)
 		return DRV_STORE_BAD;
@@ -714,8 +723,8 @@ static int parse_response_code(struct imap_store *ctx, struct imap_cmd_cb *cb,
 static int get_cmd_result(struct imap_store *ctx, struct imap_cmd *tcmd)
 {
 	struct imap *imap = ctx->imap;
-	struct imap_cmd *cmdp, **pcmdp, *ncmdp;
-	char *cmd, *arg, *arg1, *p;
+	struct imap_cmd *cmdp, **pcmdp;
+	char *cmd, *arg, *arg1;
 	int n, resp, resp2, tag;
 
 	for (;;) {
@@ -801,39 +810,17 @@ static int get_cmd_result(struct imap_store *ctx, struct imap_cmd *tcmd)
 			if (!strcmp("OK", arg))
 				resp = DRV_OK;
 			else {
-				if (!strcmp("NO", arg)) {
-					if (cmdp->cb.create && cmd && (cmdp->cb.trycreate || !memcmp(cmd, "[TRYCREATE]", 11))) { /* SELECT, APPEND or UID COPY */
-						p = strchr(cmdp->cmd, '"');
-						if (!issue_imap_cmd(ctx, NULL, "CREATE \"%.*s\"", (int)(strchr(p + 1, '"') - p + 1), p)) {
-							resp = RESP_BAD;
-							goto normal;
-						}
-						/* not waiting here violates the spec, but a server that does not
-						   grok this nonetheless violates it too. */
-						cmdp->cb.create = 0;
-						if (!(ncmdp = issue_imap_cmd(ctx, &cmdp->cb, "%s", cmdp->cmd))) {
-							resp = RESP_BAD;
-							goto normal;
-						}
-						free(cmdp->cmd);
-						free(cmdp);
-						if (!tcmd)
-							return 0;	/* ignored */
-						if (cmdp == tcmd)
-							tcmd = ncmdp;
-						continue;
-					}
+				if (!strcmp("NO", arg))
 					resp = RESP_NO;
-				} else /*if (!strcmp("BAD", arg))*/
+				else /*if (!strcmp("BAD", arg))*/
 					resp = RESP_BAD;
 				fprintf(stderr, "IMAP command '%s' returned response (%s) - %s\n",
-					 memcmp(cmdp->cmd, "LOGIN", 5) ?
+					!starts_with(cmdp->cmd, "LOGIN") ?
 							cmdp->cmd : "LOGIN <user> <pass>",
 							arg, cmd ? cmd : "");
 			}
 			if ((resp2 = parse_response_code(ctx, &cmdp->cb, cmd)) > resp)
 				resp = resp2;
-		normal:
 			if (cmdp->cb.done)
 				cmdp->cb.done(ctx, cmdp, resp);
 			free(cmdp->cb.data);
@@ -878,7 +865,6 @@ static char hexchar(unsigned int b)
 static char *cram(const char *challenge_64, const char *user, const char *pass)
 {
 	int i, resp_len, encoded_len, decoded_len;
-	HMAC_CTX hmac;
 	unsigned char hash[16];
 	char hex[33];
 	char *response, *response_64, *challenge;
@@ -893,10 +879,8 @@ static char *cram(const char *challenge_64, const char *user, const char *pass)
 				      (unsigned char *)challenge_64, encoded_len);
 	if (decoded_len < 0)
 		die("invalid challenge %s", challenge_64);
-	HMAC_Init(&hmac, (unsigned char *)pass, strlen(pass), EVP_md5());
-	HMAC_Update(&hmac, (unsigned char *)challenge, decoded_len);
-	HMAC_Final(&hmac, hash, NULL);
-	HMAC_CTX_cleanup(&hmac);
+	if (!HMAC(EVP_md5(), pass, strlen(pass), (unsigned char *)challenge, decoded_len, hash, NULL))
+		die("HMAC error");
 
 	hex[32] = 0;
 	for (i = 0; i < 16; i++) {
@@ -905,16 +889,14 @@ static char *cram(const char *challenge_64, const char *user, const char *pass)
 	}
 
 	/* response: "<user> <digest in hex>" */
-	resp_len = strlen(user) + 1 + strlen(hex) + 1;
-	response = xmalloc(resp_len);
-	sprintf(response, "%s %s", user, hex);
+	response = xstrfmt("%s %s", user, hex);
+	resp_len = strlen(response);
 
-	response_64 = xmalloc(ENCODED_SIZE(resp_len) + 1);
+	response_64 = xmallocz(ENCODED_SIZE(resp_len));
 	encoded_len = EVP_EncodeBlock((unsigned char *)response_64,
 				      (unsigned char *)response, resp_len);
 	if (encoded_len < 0)
 		die("EVP_EncodeBlock error");
-	response_64[encoded_len] = '\0';
 	return (char *)response_64;
 }
 
@@ -944,33 +926,33 @@ static int auth_cram_md5(struct imap_store *ctx, struct imap_cmd *cmd, const cha
 	return 0;
 }
 
-static struct imap_store *imap_open_store(struct imap_server_conf *srvc)
+static struct imap_store *imap_open_store(struct imap_server_conf *srvc, char *folder)
 {
+	struct credential cred = CREDENTIAL_INIT;
 	struct imap_store *ctx;
 	struct imap *imap;
 	char *arg, *rsp;
 	int s = -1, preauth;
 
-	ctx = xcalloc(sizeof(*ctx), 1);
+	ctx = xcalloc(1, sizeof(*ctx));
 
-	ctx->imap = imap = xcalloc(sizeof(*imap), 1);
+	ctx->imap = imap = xcalloc(1, sizeof(*imap));
 	imap->buf.sock.fd[0] = imap->buf.sock.fd[1] = -1;
 	imap->in_progress_append = &imap->in_progress;
 
 	/* open connection to IMAP server */
 
 	if (srvc->tunnel) {
-		const char *argv[] = { srvc->tunnel, NULL };
-		struct child_process tunnel = {NULL};
+		struct child_process tunnel = CHILD_PROCESS_INIT;
 
 		imap_info("Starting tunnel '%s'... ", srvc->tunnel);
 
-		tunnel.argv = argv;
+		argv_array_push(&tunnel.args, srvc->tunnel);
 		tunnel.use_shell = 1;
 		tunnel.in = -1;
 		tunnel.out = -1;
 		if (start_command(&tunnel))
-			die("cannot start proxy %s", argv[0]);
+			die("cannot start proxy %s", srvc->tunnel);
 
 		imap->buf.sock.fd[0] = tunnel.out;
 		imap->buf.sock.fd[1] = tunnel.in;
@@ -1096,28 +1078,19 @@ static struct imap_store *imap_open_store(struct imap_server_conf *srvc)
 		}
 #endif
 		imap_info("Logging in...\n");
-		if (!srvc->user) {
-			fprintf(stderr, "Skipping server %s, no user\n", srvc->host);
-			goto bail;
-		}
-		if (!srvc->pass) {
-			struct strbuf prompt = STRBUF_INIT;
-			strbuf_addf(&prompt, "Password (%s@%s): ", srvc->user, srvc->host);
-			arg = git_getpass(prompt.buf);
-			strbuf_release(&prompt);
-			if (!*arg) {
-				fprintf(stderr, "Skipping account %s@%s, no password\n", srvc->user, srvc->host);
-				goto bail;
-			}
-			/*
-			 * getpass() returns a pointer to a static buffer.  make a copy
-			 * for long term storage.
-			 */
-			srvc->pass = xstrdup(arg);
-		}
-		if (CAP(NOLOGIN)) {
-			fprintf(stderr, "Skipping account %s@%s, server forbids LOGIN\n", srvc->user, srvc->host);
-			goto bail;
+		if (!srvc->user || !srvc->pass) {
+			cred.protocol = xstrdup(srvc->use_ssl ? "imaps" : "imap");
+			cred.host = xstrdup(srvc->host);
+
+			cred.username = xstrdup_or_null(srvc->user);
+			cred.password = xstrdup_or_null(srvc->pass);
+
+			credential_fill(&cred);
+
+			if (!srvc->user)
+				srvc->user = xstrdup(cred.username);
+			if (!srvc->pass)
+				srvc->pass = xstrdup(cred.password);
 		}
 
 		if (srvc->auth_method) {
@@ -1143,6 +1116,11 @@ static struct imap_store *imap_open_store(struct imap_server_conf *srvc)
 				goto bail;
 			}
 		} else {
+			if (CAP(NOLOGIN)) {
+				fprintf(stderr, "Skipping account %s@%s, server forbids LOGIN\n",
+					srvc->user, srvc->host);
+				goto bail;
+			}
 			if (!imap->buf.sock.ssl)
 				imap_warn("*** IMAP Warning *** Password is being "
 					  "sent in the clear\n");
@@ -1153,10 +1131,38 @@ static struct imap_store *imap_open_store(struct imap_server_conf *srvc)
 		}
 	} /* !preauth */
 
+	if (cred.username)
+		credential_approve(&cred);
+	credential_clear(&cred);
+
+	/* check the target mailbox exists */
+	ctx->name = folder;
+	switch (imap_exec(ctx, NULL, "EXAMINE \"%s\"", ctx->name)) {
+	case RESP_OK:
+		/* ok */
+		break;
+	case RESP_BAD:
+		fprintf(stderr, "IMAP error: could not check mailbox\n");
+		goto out;
+	case RESP_NO:
+		if (imap_exec(ctx, NULL, "CREATE \"%s\"", ctx->name) == RESP_OK) {
+			imap_info("Created missing mailbox\n");
+		} else {
+			fprintf(stderr, "IMAP error: could not create missing mailbox\n");
+			goto out;
+		}
+		break;
+	}
+
 	ctx->prefix = "";
 	return ctx;
 
 bail:
+	if (cred.username)
+		credential_reject(&cred);
+	credential_clear(&cred);
+
+ out:
 	imap_close_store(ctx);
 	return NULL;
 }
@@ -1179,7 +1185,7 @@ static void lf_to_crlf(struct strbuf *msg)
 		j++;
 	}
 
-	new = xmalloc(j + 1);
+	new = xmallocz(j);
 
 	/*
 	 * Second pass: write the new string.  Note that this loop is
@@ -1212,7 +1218,6 @@ static int imap_store_msg(struct imap_store *ctx, struct strbuf *msg)
 
 	box = ctx->name;
 	prefix = !strcmp(box, "INBOX") ? "" : ctx->prefix;
-	cb.create = 0;
 	ret = imap_exec_m(ctx, &cb, "APPEND \"%s%s\" ", prefix, box);
 	imap->caps = imap->rcaps;
 	if (ret != DRV_OK)
@@ -1317,75 +1322,208 @@ static int split_msg(struct strbuf *all_msgs, struct strbuf *msg, int *ofs)
 	return 1;
 }
 
-static char *imap_folder;
-
-static int git_imap_config(const char *key, const char *val, void *cb)
+static void git_imap_config(void)
 {
-	char imap_key[] = "imap.";
+	const char *val = NULL;
 
-	if (strncmp(key, imap_key, sizeof imap_key - 1))
-		return 0;
+	git_config_get_bool("imap.sslverify", &server.ssl_verify);
+	git_config_get_bool("imap.preformattedhtml", &server.use_html);
+	git_config_get_string("imap.folder", &server.folder);
 
-	key += sizeof imap_key - 1;
-
-	/* check booleans first, and barf on others */
-	if (!strcmp("sslverify", key))
-		server.ssl_verify = git_config_bool(key, val);
-	else if (!strcmp("preformattedhtml", key))
-		server.use_html = git_config_bool(key, val);
-	else if (!val)
-		return config_error_nonbool(key);
-
-	if (!strcmp("folder", key)) {
-		imap_folder = xstrdup(val);
-	} else if (!strcmp("host", key)) {
-		if (starts_with(val, "imap:"))
-			val += 5;
-		else if (starts_with(val, "imaps:")) {
-			val += 6;
-			server.use_ssl = 1;
+	if (!git_config_get_value("imap.host", &val)) {
+		if (!val) {
+			git_die_config("imap.host", "Missing value for 'imap.host'");
+		} else {
+			if (starts_with(val, "imap:"))
+				val += 5;
+			else if (starts_with(val, "imaps:")) {
+				val += 6;
+				server.use_ssl = 1;
+			}
+			if (starts_with(val, "//"))
+				val += 2;
+			server.host = xstrdup(val);
 		}
-		if (starts_with(val, "//"))
-			val += 2;
-		server.host = xstrdup(val);
-	} else if (!strcmp("user", key))
-		server.user = xstrdup(val);
-	else if (!strcmp("pass", key))
-		server.pass = xstrdup(val);
-	else if (!strcmp("port", key))
-		server.port = git_config_int(key, val);
-	else if (!strcmp("tunnel", key))
-		server.tunnel = xstrdup(val);
-	else if (!strcmp("authmethod", key))
-		server.auth_method = xstrdup(val);
+	}
 
-	return 0;
+	git_config_get_string("imap.user", &server.user);
+	git_config_get_string("imap.pass", &server.pass);
+	git_config_get_int("imap.port", &server.port);
+	git_config_get_string("imap.tunnel", &server.tunnel);
+	git_config_get_string("imap.authmethod", &server.auth_method);
 }
 
-int main(int argc, char **argv)
+static int append_msgs_to_imap(struct imap_server_conf *server,
+			       struct strbuf* all_msgs, int total)
 {
-	struct strbuf all_msgs = STRBUF_INIT;
 	struct strbuf msg = STRBUF_INIT;
 	struct imap_store *ctx = NULL;
 	int ofs = 0;
 	int r;
-	int total, n = 0;
+	int n = 0;
+
+	ctx = imap_open_store(server, server->folder);
+	if (!ctx) {
+		fprintf(stderr, "failed to open store\n");
+		return 1;
+	}
+	ctx->name = server->folder;
+
+	fprintf(stderr, "sending %d message%s\n", total, (total != 1) ? "s" : "");
+	while (1) {
+		unsigned percent = n * 100 / total;
+
+		fprintf(stderr, "%4u%% (%d/%d) done\r", percent, n, total);
+
+		if (!split_msg(all_msgs, &msg, &ofs))
+			break;
+		if (server->use_html)
+			wrap_in_html(&msg);
+		r = imap_store_msg(ctx, &msg);
+		if (r != DRV_OK)
+			break;
+		n++;
+	}
+	fprintf(stderr, "\n");
+
+	imap_close_store(ctx);
+
+	return 0;
+}
+
+#ifdef USE_CURL_FOR_IMAP_SEND
+static CURL *setup_curl(struct imap_server_conf *srvc)
+{
+	CURL *curl;
+	struct strbuf path = STRBUF_INIT;
+
+	if (curl_global_init(CURL_GLOBAL_ALL) != CURLE_OK)
+		die("curl_global_init failed");
+
+	curl = curl_easy_init();
+
+	if (!curl)
+		die("curl_easy_init failed");
+
+	curl_easy_setopt(curl, CURLOPT_USERNAME, server.user);
+	curl_easy_setopt(curl, CURLOPT_PASSWORD, server.pass);
+
+	strbuf_addstr(&path, server.use_ssl ? "imaps://" : "imap://");
+	strbuf_addstr(&path, server.host);
+	if (!path.len || path.buf[path.len - 1] != '/')
+		strbuf_addch(&path, '/');
+	strbuf_addstr(&path, server.folder);
+
+	curl_easy_setopt(curl, CURLOPT_URL, path.buf);
+	strbuf_release(&path);
+	curl_easy_setopt(curl, CURLOPT_PORT, server.port);
+
+	if (server.auth_method) {
+#if LIBCURL_VERSION_NUM < 0x072200
+		warning("No LOGIN_OPTIONS support in this cURL version");
+#else
+		struct strbuf auth = STRBUF_INIT;
+		strbuf_addstr(&auth, "AUTH=");
+		strbuf_addstr(&auth, server.auth_method);
+		curl_easy_setopt(curl, CURLOPT_LOGIN_OPTIONS, auth.buf);
+		strbuf_release(&auth);
+#endif
+	}
+
+	if (!server.use_ssl)
+		curl_easy_setopt(curl, CURLOPT_USE_SSL, (long)CURLUSESSL_TRY);
+
+	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, server.ssl_verify);
+	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, server.ssl_verify);
+
+	curl_easy_setopt(curl, CURLOPT_READFUNCTION, fread_buffer);
+
+	curl_easy_setopt(curl, CURLOPT_UPLOAD, 1L);
+
+	if (0 < verbosity || getenv("GIT_CURL_VERBOSE"))
+		curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
+	setup_curl_trace(curl);
+
+	return curl;
+}
+
+static int curl_append_msgs_to_imap(struct imap_server_conf *server,
+				    struct strbuf* all_msgs, int total) {
+	int ofs = 0;
+	int n = 0;
+	struct buffer msgbuf = { STRBUF_INIT, 0 };
+	CURL *curl;
+	CURLcode res = CURLE_OK;
+
+	curl = setup_curl(server);
+	curl_easy_setopt(curl, CURLOPT_READDATA, &msgbuf);
+
+	fprintf(stderr, "sending %d message%s\n", total, (total != 1) ? "s" : "");
+	while (1) {
+		unsigned percent = n * 100 / total;
+		int prev_len;
+
+		fprintf(stderr, "%4u%% (%d/%d) done\r", percent, n, total);
+
+		prev_len = msgbuf.buf.len;
+		if (!split_msg(all_msgs, &msgbuf.buf, &ofs))
+			break;
+		if (server->use_html)
+			wrap_in_html(&msgbuf.buf);
+		lf_to_crlf(&msgbuf.buf);
+
+		curl_easy_setopt(curl, CURLOPT_INFILESIZE_LARGE,
+				 (curl_off_t)(msgbuf.buf.len-prev_len));
+
+		res = curl_easy_perform(curl);
+
+		if(res != CURLE_OK) {
+			fprintf(stderr, "curl_easy_perform() failed: %s\n",
+					curl_easy_strerror(res));
+			break;
+		}
+
+		n++;
+	}
+	fprintf(stderr, "\n");
+
+	curl_easy_cleanup(curl);
+	curl_global_cleanup();
+
+	return 0;
+}
+#endif
+
+int cmd_main(int argc, const char **argv)
+{
+	struct strbuf all_msgs = STRBUF_INIT;
+	int total;
 	int nongit_ok;
 
-	git_extract_argv0_path(argv[0]);
-
-	git_setup_gettext();
-
-	if (argc != 1)
-		usage(imap_send_usage);
-
 	setup_git_directory_gently(&nongit_ok);
-	git_config(git_imap_config, NULL);
+	git_imap_config();
+
+	argc = parse_options(argc, (const char **)argv, "", imap_send_options, imap_send_usage, 0);
+
+	if (argc)
+		usage_with_options(imap_send_usage, imap_send_options);
+
+#ifndef USE_CURL_FOR_IMAP_SEND
+	if (use_curl) {
+		warning("--curl not supported in this build");
+		use_curl = 0;
+	}
+#elif defined(NO_OPENSSL)
+	if (!use_curl) {
+		warning("--no-curl not supported in this build");
+		use_curl = 1;
+	}
+#endif
 
 	if (!server.port)
 		server.port = server.use_ssl ? 993 : 143;
 
-	if (!imap_folder) {
+	if (!server.folder) {
 		fprintf(stderr, "no imap store specified\n");
 		return 1;
 	}
@@ -1415,30 +1553,14 @@ int main(int argc, char **argv)
 	}
 
 	/* write it to the imap server */
-	ctx = imap_open_store(&server);
-	if (!ctx) {
-		fprintf(stderr, "failed to open store\n");
-		return 1;
-	}
 
-	fprintf(stderr, "sending %d message%s\n", total, (total != 1) ? "s" : "");
-	ctx->name = imap_folder;
-	while (1) {
-		unsigned percent = n * 100 / total;
+	if (server.tunnel)
+		return append_msgs_to_imap(&server, &all_msgs, total);
 
-		fprintf(stderr, "%4u%% (%d/%d) done\r", percent, n, total);
-		if (!split_msg(&all_msgs, &msg, &ofs))
-			break;
-		if (server.use_html)
-			wrap_in_html(&msg);
-		r = imap_store_msg(ctx, &msg);
-		if (r != DRV_OK)
-			break;
-		n++;
-	}
-	fprintf(stderr, "\n");
+#ifdef USE_CURL_FOR_IMAP_SEND
+	if (use_curl)
+		return curl_append_msgs_to_imap(&server, &all_msgs, total);
+#endif
 
-	imap_close_store(ctx);
-
-	return 0;
+	return append_msgs_to_imap(&server, &all_msgs, total);
 }

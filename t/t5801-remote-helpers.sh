@@ -87,11 +87,27 @@ test_expect_success 'push new branch by name' '
 	compare_refs local HEAD server refs/heads/new-name
 '
 
-test_expect_failure 'push new branch with old:new refspec' '
+test_expect_success 'push new branch with old:new refspec' '
 	(cd local &&
 	 git push origin new-name:new-refspec
 	) &&
 	compare_refs local HEAD server refs/heads/new-refspec
+'
+
+test_expect_success 'push new branch with HEAD:new refspec' '
+	(cd local &&
+	 git checkout new-name
+	 git push origin HEAD:new-refspec-2
+	) &&
+	compare_refs local HEAD server refs/heads/new-refspec-2
+'
+
+test_expect_success 'push delete branch' '
+	(cd local &&
+	 git push origin :new-name
+	) &&
+	test_must_fail git --git-dir="server/.git" \
+	 rev-parse --verify refs/heads/new-name
 '
 
 test_expect_success 'forced push' '
@@ -212,29 +228,38 @@ test_expect_success 'push update refs failure' '
 	echo "update fail" >>file &&
 	git commit -a -m "update fail" &&
 	git rev-parse --verify testgit/origin/heads/update >expect &&
-	GIT_REMOTE_TESTGIT_PUSH_ERROR="non-fast forward" &&
-	export GIT_REMOTE_TESTGIT_PUSH_ERROR &&
-	test_expect_code 1 git push origin update &&
+	test_expect_code 1 env GIT_REMOTE_TESTGIT_FAILURE="non-fast forward" \
+		git push origin update &&
 	git rev-parse --verify testgit/origin/heads/update >actual &&
 	test_cmp expect actual
 	)
 '
 
+clean_mark () {
+	cut -f 2 -d ' ' "$1" |
+	git cat-file --batch-check |
+	grep commit |
+	sort >$(basename "$1")
+}
+
 test_expect_success 'proper failure checks for fetching' '
-	(GIT_REMOTE_TESTGIT_FAILURE=1 &&
-	export GIT_REMOTE_TESTGIT_FAILURE &&
-	cd local &&
-	test_must_fail git fetch 2> error &&
+	(cd local &&
+	test_must_fail env GIT_REMOTE_TESTGIT_FAILURE=1 git fetch 2>error &&
 	cat error &&
 	grep -q "Error while running fast-import" error
 	)
 '
 
 test_expect_success 'proper failure checks for pushing' '
-	(GIT_REMOTE_TESTGIT_FAILURE=1 &&
-	export GIT_REMOTE_TESTGIT_FAILURE &&
-	cd local &&
-	test_must_fail git push --all
+	test_when_finished "rm -rf local/git.marks local/testgit.marks" &&
+	(cd local &&
+	git checkout -b crash master &&
+	echo crash >>file &&
+	git commit -a -m crash &&
+	test_must_fail env GIT_REMOTE_TESTGIT_FAILURE=1 git push --all &&
+	clean_mark ".git/testgit/origin/git.marks" &&
+	clean_mark ".git/testgit/origin/testgit.marks" &&
+	test_cmp git.marks testgit.marks
 	)
 '
 
@@ -250,6 +275,30 @@ test_expect_success 'push messages' '
 	git push origin new_branch 2> msg &&
 	! grep "\[new branch\]" msg
 	)
+'
+
+test_expect_success 'fetch HEAD' '
+	(cd server &&
+	git checkout master &&
+	echo more >>file &&
+	git commit -a -m more
+	) &&
+	(cd local &&
+	git fetch origin HEAD
+	) &&
+	compare_refs server HEAD local FETCH_HEAD
+'
+
+test_expect_success 'fetch url' '
+	(cd server &&
+	git checkout master &&
+	echo more >>file &&
+	git commit -a -m more
+	) &&
+	(cd local &&
+	git fetch "testgit::${PWD}/../server"
+	) &&
+	compare_refs server HEAD local FETCH_HEAD
 '
 
 test_done

@@ -104,7 +104,7 @@ EOF
 '
 
 test_expect_success 'push from full to shallow' '
-	! git --git-dir=shallow2/.git cat-file blob `echo 1|git hash-object --stdin` &&
+	! git --git-dir=shallow2/.git cat-file blob $(echo 1|git hash-object --stdin) &&
 	commit 1 &&
 	git push shallow2/.git +master:refs/remotes/top/master &&
 	(
@@ -117,66 +117,7 @@ test_expect_success 'push from full to shallow' '
 3
 EOF
 	test_cmp expect actual &&
-	git cat-file blob `echo 1|git hash-object --stdin` >/dev/null
+	git cat-file blob $(echo 1|git hash-object --stdin) >/dev/null
 	)
 '
-
-if test -n "$NO_CURL" -o -z "$GIT_TEST_HTTPD"; then
-	say 'skipping remaining tests, git built without http support'
-	test_done
-fi
-
-. "$TEST_DIRECTORY"/lib-httpd.sh
-start_httpd
-
-test_expect_success 'push to shallow repo via http' '
-	git clone --bare --no-local shallow "$HTTPD_DOCUMENT_ROOT_PATH/repo.git" &&
-	(
-	cd "$HTTPD_DOCUMENT_ROOT_PATH/repo.git" &&
-	git config http.receivepack true
-	) &&
-	(
-	cd full &&
-	commit 9 &&
-	git push $HTTPD_URL/smart/repo.git +master:refs/remotes/top/master
-	) &&
-	(
-	cd "$HTTPD_DOCUMENT_ROOT_PATH/repo.git" &&
-	git fsck &&
-	git log --format=%s top/master >actual &&
-	cat <<EOF >expect &&
-9
-4
-3
-EOF
-	test_cmp expect actual
-	)
-'
-
-test_expect_success 'push from shallow repo via http' '
-	mv "$HTTPD_DOCUMENT_ROOT_PATH/repo.git" shallow-upstream.git &&
-	git clone --bare --no-local full "$HTTPD_DOCUMENT_ROOT_PATH/repo.git" &&
-	(
-	cd "$HTTPD_DOCUMENT_ROOT_PATH/repo.git" &&
-	git config http.receivepack true
-	) &&
-	commit 10 &&
-	git push $HTTPD_URL/smart/repo.git +master:refs/remotes/top/master &&
-	(
-	cd "$HTTPD_DOCUMENT_ROOT_PATH/repo.git" &&
-	git fsck &&
-	git log --format=%s top/master >actual &&
-	cat <<EOF >expect &&
-10
-1
-4
-3
-2
-1
-EOF
-	test_cmp expect actual
-	)
-'
-
-stop_httpd
 test_done

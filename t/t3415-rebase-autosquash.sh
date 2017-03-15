@@ -250,4 +250,58 @@ test_expect_success 'squash! fixup!' '
 	test_auto_fixup_fixup squash fixup
 '
 
+test_expect_success 'autosquash with custom inst format' '
+	git reset --hard base &&
+	git config --add rebase.instructionFormat "[%an @ %ar] %s"  &&
+	echo 2 >file1 &&
+	git add -u &&
+	test_tick &&
+	git commit -m "squash! $(git rev-parse --short HEAD^)" &&
+	echo 1 >file1 &&
+	git add -u &&
+	test_tick &&
+	git commit -m "squash! $(git log -n 1 --format=%s HEAD~2)" &&
+	git tag final-squash-instFmt &&
+	test_tick &&
+	git rebase --autosquash -i HEAD~4 &&
+	git log --oneline >actual &&
+	test_line_count = 3 actual &&
+	git diff --exit-code final-squash-instFmt &&
+	test 1 = "$(git cat-file blob HEAD^:file1)" &&
+	test 2 = $(git cat-file commit HEAD^ | grep squash | wc -l)
+'
+
+set_backup_editor () {
+	write_script backup-editor.sh <<-\EOF
+	cp "$1" .git/backup-"$(basename "$1")"
+	EOF
+	test_set_editor "$PWD/backup-editor.sh"
+}
+
+test_expect_failure 'autosquash with multiple empty patches' '
+	test_tick &&
+	git commit --allow-empty -m "empty" &&
+	test_tick &&
+	git commit --allow-empty -m "empty2" &&
+	test_tick &&
+	>fixup &&
+	git add fixup &&
+	git commit --fixup HEAD^^ &&
+	(
+		set_backup_editor &&
+		GIT_USE_REBASE_HELPER=false \
+		git rebase -i --force-rebase --autosquash HEAD~4 &&
+		grep empty2 .git/backup-git-rebase-todo
+	)
+'
+
+test_expect_success 'extra spaces after fixup!' '
+	base=$(git rev-parse HEAD) &&
+	test_commit to-fixup &&
+	git commit --allow-empty -m "fixup!  to-fixup" &&
+	git rebase -i --autosquash --keep-empty HEAD~2 &&
+	parent=$(git rev-parse HEAD^) &&
+	test $base = $parent
+'
+
 test_done

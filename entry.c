@@ -6,7 +6,7 @@
 static void create_directories(const char *path, int path_len,
 			       const struct checkout *state)
 {
-	char *buf = xmalloc(path_len + 1);
+	char *buf = xmallocz(path_len);
 	int len = 0;
 
 	while (len < path_len) {
@@ -44,33 +44,33 @@ static void create_directories(const char *path, int path_len,
 	free(buf);
 }
 
-static void remove_subtree(const char *path)
+static void remove_subtree(struct strbuf *path)
 {
-	DIR *dir = opendir(path);
+	DIR *dir = opendir(path->buf);
 	struct dirent *de;
-	char pathbuf[PATH_MAX];
-	char *name;
+	int origlen = path->len;
 
 	if (!dir)
-		die_errno("cannot opendir '%s'", path);
-	strcpy(pathbuf, path);
-	name = pathbuf + strlen(path);
-	*name++ = '/';
+		die_errno("cannot opendir '%s'", path->buf);
 	while ((de = readdir(dir)) != NULL) {
 		struct stat st;
+
 		if (is_dot_or_dotdot(de->d_name))
 			continue;
-		strcpy(name, de->d_name);
-		if (lstat(pathbuf, &st))
-			die_errno("cannot lstat '%s'", pathbuf);
+
+		strbuf_addch(path, '/');
+		strbuf_addstr(path, de->d_name);
+		if (lstat(path->buf, &st))
+			die_errno("cannot lstat '%s'", path->buf);
 		if (S_ISDIR(st.st_mode))
-			remove_subtree(pathbuf);
-		else if (unlink(pathbuf))
-			die_errno("cannot unlink '%s'", pathbuf);
+			remove_subtree(path);
+		else if (unlink(path->buf))
+			die_errno("cannot unlink '%s'", path->buf);
+		strbuf_setlen(path, origlen);
 	}
 	closedir(dir);
-	if (rmdir(path))
-		die_errno("cannot rmdir '%s'", path);
+	if (rmdir(path->buf))
+		die_errno("cannot rmdir '%s'", path->buf);
 }
 
 static int create_file(const char *path, unsigned int mode)
@@ -82,7 +82,7 @@ static int create_file(const char *path, unsigned int mode)
 static void *read_blob_entry(const struct cache_entry *ce, unsigned long *size)
 {
 	enum object_type type;
-	void *new = read_sha1_file(ce->sha1, &type, size);
+	void *new = read_sha1_file(ce->oid.hash, &type, size);
 
 	if (new) {
 		if (type == OBJ_BLOB)
@@ -96,8 +96,8 @@ static int open_output_fd(char *path, const struct cache_entry *ce, int to_tempf
 {
 	int symlink = (ce->ce_mode & S_IFMT) != S_IFREG;
 	if (to_tempfile) {
-		strcpy(path, symlink
-		       ? ".merge_link_XXXXXX" : ".merge_file_XXXXXX");
+		xsnprintf(path, TEMPORARY_FILENAME_LENGTH, "%s",
+			  symlink ? ".merge_link_XXXXXX" : ".merge_file_XXXXXX");
 		return mkstemp(path);
 	} else {
 		return create_file(path, !symlink ? ce->ce_mode : 0666);
@@ -127,7 +127,7 @@ static int streaming_write_entry(const struct cache_entry *ce, char *path,
 	if (fd < 0)
 		return -1;
 
-	result |= stream_blob_to_fd(fd, ce->sha1, filter, 1);
+	result |= stream_blob_to_fd(fd, &ce->oid, filter, 1);
 	*fstat_done = fstat_output(fd, state, statbuf);
 	result |= close(fd);
 
@@ -148,7 +148,8 @@ static int write_entry(struct cache_entry *ce,
 	struct stat st;
 
 	if (ce_mode_s_ifmt == S_IFREG) {
-		struct stream_filter *filter = get_stream_filter(ce->name, ce->sha1);
+		struct stream_filter *filter = get_stream_filter(ce->name,
+								 ce->oid.hash);
 		if (filter &&
 		    !streaming_write_entry(ce, path, filter,
 					   state, to_tempfile,
@@ -162,14 +163,14 @@ static int write_entry(struct cache_entry *ce,
 		new = read_blob_entry(ce, &size);
 		if (!new)
 			return error("unable to read sha1 file of %s (%s)",
-				path, sha1_to_hex(ce->sha1));
+				path, oid_to_hex(&ce->oid));
 
 		if (ce_mode_s_ifmt == S_IFLNK && has_symlinks && !to_tempfile) {
 			ret = symlink(new, path);
 			free(new);
 			if (ret)
-				return error("unable to create symlink %s (%s)",
-					     path, strerror(errno));
+				return error_errno("unable to create symlink %s",
+						   path);
 			break;
 		}
 
@@ -186,8 +187,7 @@ static int write_entry(struct cache_entry *ce,
 		fd = open_output_fd(path, ce, to_tempfile);
 		if (fd < 0) {
 			free(new);
-			return error("unable to create file %s (%s)",
-				path, strerror(errno));
+			return error_errno("unable to create file %s", path);
 		}
 
 		wrote = write_in_full(fd, new, size);
@@ -210,9 +210,12 @@ static int write_entry(struct cache_entry *ce,
 
 finish:
 	if (state->refresh_cache) {
+		assert(state->istate);
 		if (!fstat_done)
 			lstat(ce->name, &st);
 		fill_stat_cache_info(ce, &st);
+		ce->ce_flags |= CE_UPDATE_IN_BASE;
+		state->istate->cache_changed |= CE_ENTRY_CHANGED;
 	}
 	return 0;
 }
@@ -245,27 +248,25 @@ static int check_path(const char *path, int len, struct stat *st, int skiplen)
 int checkout_entry(struct cache_entry *ce,
 		   const struct checkout *state, char *topath)
 {
-	static struct strbuf path_buf = STRBUF_INIT;
-	char *path;
+	static struct strbuf path = STRBUF_INIT;
 	struct stat st;
-	int len;
 
 	if (topath)
 		return write_entry(ce, topath, state, 1);
 
-	strbuf_reset(&path_buf);
-	strbuf_add(&path_buf, state->base_dir, state->base_dir_len);
-	strbuf_add(&path_buf, ce->name, ce_namelen(ce));
-	path = path_buf.buf;
-	len = path_buf.len;
+	strbuf_reset(&path);
+	strbuf_add(&path, state->base_dir, state->base_dir_len);
+	strbuf_add(&path, ce->name, ce_namelen(ce));
 
-	if (!check_path(path, len, &st, state->base_dir_len)) {
+	if (!check_path(path.buf, path.len, &st, state->base_dir_len)) {
 		unsigned changed = ce_match_stat(ce, &st, CE_MATCH_IGNORE_VALID|CE_MATCH_IGNORE_SKIP_WORKTREE);
 		if (!changed)
 			return 0;
 		if (!state->force) {
 			if (!state->quiet)
-				fprintf(stderr, "%s already exists, no checkout\n", path);
+				fprintf(stderr,
+					"%s already exists, no checkout\n",
+					path.buf);
 			return -1;
 		}
 
@@ -280,12 +281,13 @@ int checkout_entry(struct cache_entry *ce,
 			if (S_ISGITLINK(ce->ce_mode))
 				return 0;
 			if (!state->force)
-				return error("%s is a directory", path);
-			remove_subtree(path);
-		} else if (unlink(path))
-			return error("unable to unlink old '%s' (%s)", path, strerror(errno));
+				return error("%s is a directory", path.buf);
+			remove_subtree(&path);
+		} else if (unlink(path.buf))
+			return error_errno("unable to unlink old '%s'", path.buf);
 	} else if (state->not_new)
 		return 0;
-	create_directories(path, len, state);
-	return write_entry(ce, path, state, 0);
+
+	create_directories(path.buf, path.len, state);
+	return write_entry(ce, path.buf, state, 0);
 }

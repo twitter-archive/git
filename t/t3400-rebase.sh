@@ -88,6 +88,23 @@ test_expect_success 'rebase from ambiguous branch name' '
 	git rebase master
 '
 
+test_expect_success 'rebase off of the previous branch using "-"' '
+	git checkout master &&
+	git checkout HEAD^ &&
+	git rebase @{-1} >expect.messages &&
+	git merge-base master HEAD >expect.forkpoint &&
+
+	git checkout master &&
+	git checkout HEAD^ &&
+	git rebase - >actual.messages &&
+	git merge-base master HEAD >actual.forkpoint &&
+
+	test_cmp expect.forkpoint actual.forkpoint &&
+	# the next one is dubious---we may want to say "-",
+	# instead of @{-1}, in the message
+	test_i18ncmp expect.messages actual.messages
+'
+
 test_expect_success 'rebase a single mode change' '
 	git checkout master &&
 	git branch -D topic &&
@@ -119,8 +136,8 @@ test_expect_success 'setup: recover' '
 test_expect_success 'Show verbose error when HEAD could not be detached' '
 	>B &&
 	test_must_fail git rebase topic 2>output.err >output.out &&
-	grep "The following untracked working tree files would be overwritten by checkout:" output.err &&
-	grep B output.err
+	test_i18ngrep "The following untracked working tree files would be overwritten by checkout:" output.err &&
+	test_i18ngrep B output.err
 '
 rm -f B
 
@@ -150,6 +167,29 @@ test_expect_success 'default to common base in @{upstream}s reflog if no upstrea
 	git rev-parse --verify default-base >expect &&
 	git rev-parse default~1 >actual &&
 	test_cmp expect actual
+'
+
+test_expect_success 'cherry-picked commits and fork-point work together' '
+	git checkout default-base &&
+	echo Amended >A &&
+	git commit -a --no-edit --amend &&
+	test_commit B B &&
+	test_commit new_B B "New B" &&
+	test_commit C C &&
+	git checkout default &&
+	git reset --hard default-base@{4} &&
+	test_commit D D &&
+	git cherry-pick -2 default-base^ &&
+	test_commit final_B B "Final B" &&
+	git rebase &&
+	echo Amended >expect &&
+	test_cmp A expect &&
+	echo "Final B" >expect &&
+	test_cmp B expect &&
+	echo C >expect &&
+	test_cmp C expect &&
+	echo D >expect &&
+	test_cmp D expect
 '
 
 test_expect_success 'rebase -q is quiet' '

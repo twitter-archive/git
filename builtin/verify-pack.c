@@ -8,7 +8,7 @@
 
 static int verify_one_pack(const char *path, unsigned int flags)
 {
-	struct child_process index_pack;
+	struct child_process index_pack = CHILD_PROCESS_INIT;
 	const char *argv[] = {"index-pack", NULL, NULL, NULL };
 	struct strbuf arg = STRBUF_INIT;
 	int verbose = flags & VERIFY_PACK_VERBOSE;
@@ -27,13 +27,11 @@ static int verify_one_pack(const char *path, unsigned int flags)
 	 * normalize these forms to "foo.pack" for "index-pack --verify".
 	 */
 	strbuf_addstr(&arg, path);
-	if (has_extension(arg.buf, ".idx"))
-		strbuf_splice(&arg, arg.len - 3, 3, "pack", 4);
-	else if (!has_extension(arg.buf, ".pack"))
-		strbuf_add(&arg, ".pack", 5);
+	if (strbuf_strip_suffix(&arg, ".idx") ||
+	    !ends_with(arg.buf, ".pack"))
+		strbuf_addstr(&arg, ".pack");
 	argv[2] = arg.buf;
 
-	memset(&index_pack, 0, sizeof(index_pack));
 	index_pack.argv = argv;
 	index_pack.git_cmd = 1;
 
@@ -53,7 +51,7 @@ static int verify_one_pack(const char *path, unsigned int flags)
 }
 
 static const char * const verify_pack_usage[] = {
-	N_("git verify-pack [-v|--verbose] [-s|--stat-only] <pack>..."),
+	N_("git verify-pack [-v | --verbose] [-s | --stat-only] <pack>..."),
 	NULL
 };
 

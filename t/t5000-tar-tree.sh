@@ -72,7 +72,7 @@ check_tar() {
 			for header in *.paxheader
 			do
 				data=${header%.paxheader}.data &&
-				if test -h $data -o -e $data
+				if test -h $data || test -e $data
 				then
 					path=$(get_pax_header $header path) &&
 					if test -n "$path"
@@ -101,7 +101,7 @@ test_expect_success \
      ten=0123456789 && hundred=$ten$ten$ten$ten$ten$ten$ten$ten$ten$ten &&
      echo long filename >a/four$hundred &&
      mkdir a/bin &&
-     cp /bin/sh a/bin &&
+     test-genrandom "frotz" 500000 >a/bin/sh &&
      printf "A\$Format:%s\$O" "$SUBSTFORMAT" >a/substfile1 &&
      printf "A not substituted O" >a/substfile2 &&
      if test_have_prereq SYMLINKS; then
@@ -119,14 +119,10 @@ test_expect_success \
     'echo ignore me >a/ignored &&
      echo ignored export-ignore >.git/info/attributes'
 
-test_expect_success \
-    'add files to repository' \
-    'find a -type f | xargs git update-index --add &&
-     find a -type l | xargs git update-index --add &&
-     treeid=`git write-tree` &&
-     echo $treeid >treeid &&
-     git update-ref HEAD $(TZ=GMT GIT_COMMITTER_DATE="2005-05-27 22:00:00" \
-     git commit-tree $treeid </dev/null)'
+test_expect_success 'add files to repository' '
+	git add a &&
+	GIT_COMMITTER_DATE="2005-05-27 22:00" git commit -m initial
+'
 
 test_expect_success 'setup export-subst' '
 	echo "substfile?" export-subst >>.git/info/attributes &&
@@ -164,7 +160,7 @@ check_tar with_olde-prefix olde-
 test_expect_success 'git archive on large files' '
     test_config core.bigfilethreshold 1 &&
     git archive HEAD >b3.tar &&
-    test_cmp b.tar b3.tar
+    test_cmp_bin b.tar b3.tar
 '
 
 test_expect_success \
@@ -173,15 +169,24 @@ test_expect_success \
 
 test_expect_success \
     'git archive vs. the same in a bare repo' \
-    'test_cmp b.tar b3.tar'
+    'test_cmp_bin b.tar b3.tar'
 
 test_expect_success 'git archive with --output' \
     'git archive --output=b4.tar HEAD &&
-    test_cmp b.tar b4.tar'
+    test_cmp_bin b.tar b4.tar'
 
 test_expect_success 'git archive --remote' \
     'git archive --remote=. HEAD >b5.tar &&
-    test_cmp b.tar b5.tar'
+    test_cmp_bin b.tar b5.tar'
+
+test_expect_success 'git archive --remote with configured remote' '
+	git config remote.foo.url . &&
+	(
+		cd a &&
+		git archive --remote=foo --output=../b5-nick.tar HEAD
+	) &&
+	test_cmp_bin b.tar b5-nick.tar
+'
 
 test_expect_success \
     'validate file modification time' \
@@ -198,16 +203,22 @@ test_expect_success \
 
 test_expect_success 'git archive with --output, override inferred format' '
 	git archive --format=tar --output=d4.zip HEAD &&
-	test_cmp b.tar d4.zip
+	test_cmp_bin b.tar d4.zip
 '
 
-test_expect_success \
-    'git archive --list outside of a git repo' \
-    'GIT_DIR=some/non-existing/directory git archive --list'
+test_expect_success 'git archive --list outside of a git repo' '
+	nongit git archive --list
+'
+
+test_expect_success 'git archive --remote outside of a git repo' '
+	git archive HEAD >expect.tar &&
+	nongit git archive --remote="$PWD" HEAD >actual.tar &&
+	test_cmp_bin expect.tar actual.tar
+'
 
 test_expect_success 'clients cannot access unreachable commits' '
 	test_commit unreachable &&
-	sha1=`git rev-parse HEAD` &&
+	sha1=$(git rev-parse HEAD) &&
 	git reset --hard HEAD^ &&
 	git archive $sha1 >remote.tar &&
 	test_must_fail git archive --remote=. $sha1 >remote.tar
@@ -215,7 +226,7 @@ test_expect_success 'clients cannot access unreachable commits' '
 
 test_expect_success 'upload-archive can allow unreachable commits' '
 	test_commit unreachable1 &&
-	sha1=`git rev-parse HEAD` &&
+	sha1=$(git rev-parse HEAD) &&
 	git reset --hard HEAD^ &&
 	git archive $sha1 >remote.tar &&
 	test_config uploadarchive.allowUnreachable true &&
@@ -244,34 +255,34 @@ test_expect_success 'archive --list shows only enabled remote filters' '
 test_expect_success 'invoke tar filter by format' '
 	git archive --format=tar.foo HEAD >config.tar.foo &&
 	tr ab ba <config.tar.foo >config.tar &&
-	test_cmp b.tar config.tar &&
+	test_cmp_bin b.tar config.tar &&
 	git archive --format=bar HEAD >config.bar &&
 	tr ab ba <config.bar >config.tar &&
-	test_cmp b.tar config.tar
+	test_cmp_bin b.tar config.tar
 '
 
 test_expect_success 'invoke tar filter by extension' '
 	git archive -o config-implicit.tar.foo HEAD &&
-	test_cmp config.tar.foo config-implicit.tar.foo &&
+	test_cmp_bin config.tar.foo config-implicit.tar.foo &&
 	git archive -o config-implicit.bar HEAD &&
-	test_cmp config.tar.foo config-implicit.bar
+	test_cmp_bin config.tar.foo config-implicit.bar
 '
 
 test_expect_success 'default output format remains tar' '
 	git archive -o config-implicit.baz HEAD &&
-	test_cmp b.tar config-implicit.baz
+	test_cmp_bin b.tar config-implicit.baz
 '
 
 test_expect_success 'extension matching requires dot' '
 	git archive -o config-implicittar.foo HEAD &&
-	test_cmp b.tar config-implicittar.foo
+	test_cmp_bin b.tar config-implicittar.foo
 '
 
 test_expect_success 'only enabled filters are available remotely' '
 	test_must_fail git archive --remote=. --format=tar.foo HEAD \
 		>remote.tar.foo &&
 	git archive --remote=. --format=bar >remote.bar HEAD &&
-	test_cmp remote.bar config.bar
+	test_cmp_bin remote.bar config.bar
 '
 
 test_expect_success GZIP 'git archive --format=tgz' '
@@ -280,33 +291,121 @@ test_expect_success GZIP 'git archive --format=tgz' '
 
 test_expect_success GZIP 'git archive --format=tar.gz' '
 	git archive --format=tar.gz HEAD >j1.tar.gz &&
-	test_cmp j.tgz j1.tar.gz
+	test_cmp_bin j.tgz j1.tar.gz
 '
 
 test_expect_success GZIP 'infer tgz from .tgz filename' '
 	git archive --output=j2.tgz HEAD &&
-	test_cmp j.tgz j2.tgz
+	test_cmp_bin j.tgz j2.tgz
 '
 
 test_expect_success GZIP 'infer tgz from .tar.gz filename' '
 	git archive --output=j3.tar.gz HEAD &&
-	test_cmp j.tgz j3.tar.gz
+	test_cmp_bin j.tgz j3.tar.gz
 '
 
 test_expect_success GZIP 'extract tgz file' '
 	gzip -d -c <j.tgz >j.tar &&
-	test_cmp b.tar j.tar
+	test_cmp_bin b.tar j.tar
 '
 
 test_expect_success GZIP 'remote tar.gz is allowed by default' '
 	git archive --remote=. --format=tar.gz HEAD >remote.tar.gz &&
-	test_cmp j.tgz remote.tar.gz
+	test_cmp_bin j.tgz remote.tar.gz
 '
 
 test_expect_success GZIP 'remote tar.gz can be disabled' '
 	git config tar.tar.gz.remote false &&
 	test_must_fail git archive --remote=. --format=tar.gz HEAD \
 		>remote.tar.gz
+'
+
+test_expect_success 'archive and :(glob)' '
+	git archive -v HEAD -- ":(glob)**/sh" >/dev/null 2>actual &&
+	cat >expect <<EOF &&
+a/
+a/bin/
+a/bin/sh
+EOF
+	test_cmp expect actual
+'
+
+test_expect_success 'catch non-matching pathspec' '
+	test_must_fail git archive -v HEAD -- "*.abc" >/dev/null
+'
+
+# Pull the size and date of each entry in a tarfile using the system tar.
+#
+# We'll pull out only the year from the date; that avoids any question of
+# timezones impacting the result (as long as we keep our test times away from a
+# year boundary; our reference times are all in August).
+#
+# The output of tar_info is expected to be "<size> <year>", both in decimal. It
+# ignores the return value of tar. We have to do this, because some of our test
+# input is only partial (the real data is 64GB in some cases).
+tar_info () {
+	"$TAR" tvf "$1" |
+	awk '{
+		split($4, date, "-")
+		print $3 " " date[1]
+	}'
+}
+
+# See if our system tar can handle a tar file with huge sizes and dates far in
+# the future, and that we can actually parse its output.
+#
+# The reference file was generated by GNU tar, and the magic time and size are
+# both octal 01000000000001, which overflows normal ustar fields.
+test_lazy_prereq TAR_HUGE '
+	echo "68719476737 4147" >expect &&
+	tar_info "$TEST_DIRECTORY"/t5000/huge-and-future.tar >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success LONG_IS_64BIT 'set up repository with huge blob' '
+	obj_d=19 &&
+	obj_f=f9c8273ec45a8938e6999cb59b3ff66739902a &&
+	obj=${obj_d}${obj_f} &&
+	mkdir -p .git/objects/$obj_d &&
+	cp "$TEST_DIRECTORY"/t5000/$obj .git/objects/$obj_d/$obj_f &&
+	rm -f .git/index &&
+	git update-index --add --cacheinfo 100644,$obj,huge &&
+	git commit -m huge
+'
+
+# We expect git to die with SIGPIPE here (otherwise we
+# would generate the whole 64GB).
+test_expect_success LONG_IS_64BIT 'generate tar with huge size' '
+	{
+		git archive HEAD
+		echo $? >exit-code
+	} | test_copy_bytes 4096 >huge.tar &&
+	echo 141 >expect &&
+	test_cmp expect exit-code
+'
+
+test_expect_success TAR_HUGE,LONG_IS_64BIT 'system tar can read our huge size' '
+	echo 68719476737 >expect &&
+	tar_info huge.tar | cut -d" " -f1 >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success LONG_IS_64BIT 'set up repository with far-future commit' '
+	rm -f .git/index &&
+	echo content >file &&
+	git add file &&
+	GIT_COMMITTER_DATE="@68719476737 +0000" \
+		git commit -m "tempori parendum"
+'
+
+test_expect_success LONG_IS_64BIT 'generate tar with future mtime' '
+	git archive HEAD >future.tar
+'
+
+test_expect_success TAR_HUGE,LONG_IS_64BIT 'system tar can read our future mtime' '
+	echo 4147 >expect &&
+	tar_info future.tar | cut -d" " -f2 >actual &&
+	test_cmp expect actual
 '
 
 test_done

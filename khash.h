@@ -117,17 +117,13 @@ static const double __ac_HASH_UPPER = 0.77;
 			if (new_n_buckets < 4) new_n_buckets = 4;					\
 			if (h->size >= (khint_t)(new_n_buckets * __ac_HASH_UPPER + 0.5)) j = 0;	/* requested size is too small */ \
 			else { /* hash table size to be changed (shrink or expand); rehash */ \
-				new_flags = (khint32_t*)xmalloc(__ac_fsize(new_n_buckets) * sizeof(khint32_t));	\
+				ALLOC_ARRAY(new_flags, __ac_fsize(new_n_buckets)); \
 				if (!new_flags) return -1;								\
 				memset(new_flags, 0xaa, __ac_fsize(new_n_buckets) * sizeof(khint32_t)); \
 				if (h->n_buckets < new_n_buckets) {	/* expand */		\
-					khkey_t *new_keys = (khkey_t*)xrealloc((void *)h->keys, new_n_buckets * sizeof(khkey_t)); \
-					if (!new_keys) return -1;							\
-					h->keys = new_keys;									\
+					REALLOC_ARRAY(h->keys, new_n_buckets); \
 					if (kh_is_map) {									\
-						khval_t *new_vals = (khval_t*)xrealloc((void *)h->vals, new_n_buckets * sizeof(khval_t)); \
-						if (!new_vals) return -1;						\
-						h->vals = new_vals;								\
+						REALLOC_ARRAY(h->vals, new_n_buckets); \
 					}													\
 				} /* otherwise shrink */								\
 			}															\
@@ -160,8 +156,8 @@ static const double __ac_HASH_UPPER = 0.77;
 				}														\
 			}															\
 			if (h->n_buckets > new_n_buckets) { /* shrink the hash table */ \
-				h->keys = (khkey_t*)xrealloc((void *)h->keys, new_n_buckets * sizeof(khkey_t)); \
-				if (kh_is_map) h->vals = (khval_t*)xrealloc((void *)h->vals, new_n_buckets * sizeof(khval_t)); \
+				REALLOC_ARRAY(h->keys, new_n_buckets); \
+				if (kh_is_map) REALLOC_ARRAY(h->vals, new_n_buckets); \
 			}															\
 			free(h->flags); /* free the working space */				\
 			h->flags = new_flags;										\
@@ -320,19 +316,12 @@ static const double __ac_HASH_UPPER = 0.77;
 		code;												\
 	} }
 
-static inline khint_t __kh_oid_hash(const unsigned char *oid)
-{
-	khint_t hash;
-	memcpy(&hash, oid, sizeof(hash));
-	return hash;
-}
-
 #define __kh_oid_cmp(a, b) (hashcmp(a, b) == 0)
 
-KHASH_INIT(sha1, const unsigned char *, void *, 1, __kh_oid_hash, __kh_oid_cmp)
+KHASH_INIT(sha1, const unsigned char *, void *, 1, sha1hash, __kh_oid_cmp)
 typedef kh_sha1_t khash_sha1;
 
-KHASH_INIT(sha1_pos, const unsigned char *, int, 1, __kh_oid_hash, __kh_oid_cmp)
+KHASH_INIT(sha1_pos, const unsigned char *, int, 1, sha1hash, __kh_oid_cmp)
 typedef kh_sha1_pos_t khash_sha1_pos;
 
 #endif /* __AC_KHASH_H */

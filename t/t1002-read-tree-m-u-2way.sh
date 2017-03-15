@@ -21,7 +21,7 @@ compare_change () {
 }
 
 check_cache_at () {
-	clean_if_empty=`git diff-files -- "$1"`
+	clean_if_empty=$(git diff-files -- "$1")
 	case "$clean_if_empty" in
 	'')  echo "$1: clean" ;;
 	?*)  echo "$1: dirty" ;;
@@ -41,14 +41,14 @@ test_expect_success \
      echo bozbar >bozbar &&
      echo rezrov >rezrov &&
      git update-index --add nitfol bozbar rezrov &&
-     treeH=`git write-tree` &&
+     treeH=$(git write-tree) &&
      echo treeH $treeH &&
      git ls-tree $treeH &&
 
      echo gnusto >bozbar &&
      git update-index --add frotz bozbar --force-remove rezrov &&
      git ls-files --stage >M.out &&
-     treeM=`git write-tree` &&
+     treeM=$(git write-tree) &&
      echo treeM $treeM &&
      git ls-tree $treeM &&
      sum bozbar frotz nitfol >M.sum &&
@@ -75,8 +75,8 @@ test_expect_success \
      echo yomin >yomin &&
      git update-index --add yomin &&
      read_tree_u_must_succeed -m -u $treeH $treeM &&
-     git ls-files --stage >4.out || return 1
-     git diff -U0 --no-index M.out 4.out >4diff.out
+     git ls-files --stage >4.out &&
+     test_might_fail git diff -U0 --no-index M.out 4.out >4diff.out &&
      compare_change 4diff.out expected &&
      check_cache_at yomin clean &&
      sum bozbar frotz nitfol >actual4.sum &&
@@ -94,8 +94,8 @@ test_expect_success \
      git update-index --add yomin &&
      echo yomin yomin >yomin &&
      read_tree_u_must_succeed -m -u $treeH $treeM &&
-     git ls-files --stage >5.out || return 1
-     git diff -U0 --no-index M.out 5.out >5diff.out
+     git ls-files --stage >5.out &&
+     test_might_fail git diff -U0 --no-index M.out 5.out >5diff.out &&
      compare_change 5diff.out expected &&
      check_cache_at yomin dirty &&
      sum bozbar frotz nitfol >actual5.sum &&
@@ -318,7 +318,7 @@ test_expect_success \
     'rm -f .git/index &&
      echo DF >DF &&
      git update-index --add DF &&
-     treeDF=`git write-tree` &&
+     treeDF=$(git write-tree) &&
      echo treeDF $treeDF &&
      git ls-tree $treeDF &&
 
@@ -326,7 +326,7 @@ test_expect_success \
      mkdir DF &&
      echo DF/DF >DF/DF &&
      git update-index --add --remove DF DF/DF &&
-     treeDFDF=`git write-tree` &&
+     treeDFDF=$(git write-tree) &&
      echo treeDFDF $treeDFDF &&
      git ls-tree $treeDFDF &&
      git ls-files --stage >DFDF.out'
