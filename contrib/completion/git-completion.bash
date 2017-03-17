@@ -21,6 +21,20 @@
 #        source ~/.git-completion.sh
 #    3) Consider changing your PS1 to also show the current branch,
 #       see git-prompt.sh for details.
+#
+# Use the following git options to modify completion behavior:
+#
+# completion.bash.disableTags -- if true, disables use of `refs/tags` with `git-for-each-ref` to
+#   compute ref name completions.
+#
+# completion.bash.disableRemotes -- if true, disables use of `refs/remotes` with `git-for-each-ref`
+#   to compute ref name completions.
+#
+# completion.bash.disableRemoteTracking -- if true, disables completion of ref names based on remote
+#   ref names unique across all remotes. Defaults to undefined.
+#
+# These options may be set on a per-repository or global level. See `git-config` for details.
+#
 
 case "$COMP_WORDBREAKS" in
 *:*) : great ;;
@@ -348,11 +362,14 @@ __git_refs ()
 				if [ -e "$dir/$i" ]; then echo $i; fi
 			done
 			format="refname:short"
-			refs="refs/tags refs/heads refs/remotes"
+			refs="refs/heads"
+			[[ $(git config --bool --get completion.bash.disableTags) = "true" ]] || refs="$refs /refs/tags"
+			[[ $(git config --bool --get completion.bash.disableRemotes) = "true" ]] || refs="$refs /refs/remotes"
 			;;
 		esac
 		git --git-dir="$dir" for-each-ref --format="%($format)" \
 			$refs
+		[[ $(git config --bool --get completion.bash.disableRemoteTracking) = "true" ]] && track=""
 		if [ -n "$track" ]; then
 			# employ the heuristic used by git checkout
 			# Try to find a remote branch that matches the completion word
